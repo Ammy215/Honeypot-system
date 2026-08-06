@@ -56,14 +56,6 @@ def show_login_page():
     # Header
     st.markdown('<h1 class="login-header">🔐 HoneyShield Login</h1>', unsafe_allow_html=True)
     
-    # Check if default credentials file exists
-    default_creds_file = Path("auth/default_credentials.txt")
-    if default_creds_file.exists():
-        st.warning("⚠️ Default credentials detected! Please login and change your password immediately.")
-        with st.expander("View Default Credentials"):
-            with open(default_creds_file, 'r') as f:
-                st.code(f.read())
-    
     # Login form
     st.markdown("### Please Login")
     
@@ -78,9 +70,11 @@ def show_login_page():
             if st.form_submit_button("❓ Help", use_container_width=True):
                 st.info("""
                 **Need Help?**
-                
-                - Default admin credentials are created on first run
-                - Check `auth/default_credentials.txt` for default password
+
+                - A default admin account is created on first run — its
+                  one-time password is printed to the server console, not
+                  stored anywhere on disk
+                - Too many failed attempts will temporarily lock the account
                 - Contact your administrator if you forgot your password
                 """)
     

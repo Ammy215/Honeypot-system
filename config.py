@@ -24,7 +24,6 @@ LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 
 # ── Threat Intelligence APIs ─────────────────────────────
 ABUSEIPDB_API_KEY = os.getenv("ABUSEIPDB_API_KEY")
-OTX_API_KEY = os.getenv("OTX_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
@@ -41,7 +40,6 @@ CREDENTIAL_STUFFING_THRESHOLD = 5  # Unique usernames per 10 minutes
 # ── Dashboard ────────────────────────────────────────────
 DASHBOARD_REFRESH_SECONDS = 15
 DASHBOARD_PORT = 8501
-API_BACKEND_URL = "http://localhost:8000"
 
 # ── Connection Limits ────────────────────────────────────
 MAX_CONNECTIONS_PER_IP = 100      # Block after this many

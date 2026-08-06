@@ -2,13 +2,15 @@
 Authentication Manager - Production-grade authentication system
 """
 
-import hashlib
 import secrets
 import json
 import logging
+import bcrypt
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 from pathlib import Path
+
+import config
 
 logger = logging.getLogger("honeypot.auth")
 
@@ -16,9 +18,10 @@ logger = logging.getLogger("honeypot.auth")
 class User:
     """User model"""
     
-    def __init__(self, username: str, password_hash: str, role: str, 
+    def __init__(self, username: str, password_hash: str, role: str,
                  email: str = "", created_at: str = None, last_login: str = None,
-                 active: bool = True, two_factor_enabled: bool = False):
+                 active: bool = True, two_factor_enabled: bool = False,
+                 failed_attempts: int = 0, locked_until: str = None):
         self.username = username
         self.password_hash = password_hash
         self.role = role  # admin, analyst, viewer
@@ -27,7 +30,9 @@ class User:
         self.last_login = last_login
         self.active = active
         self.two_factor_enabled = two_factor_enabled
-    
+        self.failed_attempts = failed_attempts
+        self.locked_until = locked_until
+
     def to_dict(self) -> dict:
         return {
             'username': self.username,
@@ -37,7 +42,9 @@ class User:
             'created_at': self.created_at,
             'last_login': self.last_login,
             'active': self.active,
-            'two_factor_enabled': self.two_factor_enabled
+            'two_factor_enabled': self.two_factor_enabled,
+            'failed_attempts': self.failed_attempts,
+            'locked_until': self.locked_until
         }
     
     @classmethod
@@ -77,6 +84,9 @@ class AuthManager:
     """Production-grade authentication manager"""
     
     ROLES = ['admin', 'analyst', 'viewer']
+
+    MAX_FAILED_LOGIN_ATTEMPTS = 5
+    LOCKOUT_DURATION_MINUTES = 15
     
     PERMISSIONS = {
         'admin': [
@@ -173,54 +183,71 @@ class AuthManager:
             self.logger.error(f"Error saving sessions: {e}")
     
     def _create_default_admin(self):
-        """Create default admin user"""
+        """Create default admin user and print the one-time password to the console.
+
+        The password is never written to disk in plaintext — this is the only
+        place it's ever shown, so it must be changed and noted immediately.
+        """
         default_password = secrets.token_urlsafe(16)
-        
+
         self.create_user(
             username='admin',
             password=default_password,
             role='admin',
             email='admin@honeypot.local'
         )
-        
-        # Save default password to file for first login
-        default_creds_file = self.auth_file.parent / 'default_credentials.txt'
-        with open(default_creds_file, 'w', encoding='utf-8') as f:
-            f.write(f"Default Admin Credentials\n")
-            f.write(f"=" * 50 + "\n")
-            f.write(f"Username: admin\n")
-            f.write(f"Password: {default_password}\n")
-            f.write(f"\n")
-            f.write(f"WARNING: CHANGE THIS PASSWORD IMMEDIATELY AFTER FIRST LOGIN!\n")
-            f.write(f"=" * 50 + "\n")
-        
-        self.logger.warning(f"Created default admin user. Credentials saved to {default_creds_file}")
-    
+
+        banner = "=" * 60
+        print(banner)
+        print("First-run setup: created default admin account")
+        print(f"  Username: admin")
+        print(f"  Password: {default_password}")
+        print("This password is shown ONCE and is not stored anywhere in")
+        print("plaintext. Save it now and change it after your first login.")
+        print(banner)
+
+        self.logger.warning("Created default admin user (credentials printed to console once, not persisted).")
+
     @staticmethod
-    def hash_password(password: str, salt: str = None) -> tuple:
-        """Hash password with salt"""
-        if salt is None:
-            salt = secrets.token_hex(32)
-        
-        # Use SHA-256 with salt (in production, use bcrypt or argon2)
-        password_hash = hashlib.pbkdf2_hmac(
-            'sha256',
-            password.encode('utf-8'),
-            salt.encode('utf-8'),
-            100000  # iterations
-        ).hex()
-        
-        return f"{salt}${password_hash}", salt
-    
+    def hash_password(password: str) -> str:
+        """Hash a password with bcrypt"""
+        return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
     @staticmethod
     def verify_password(password: str, stored_hash: str) -> bool:
-        """Verify password against stored hash"""
+        """Verify password against a stored bcrypt hash"""
         try:
-            salt, password_hash = stored_hash.split('$')
-            new_hash, _ = AuthManager.hash_password(password, salt)
-            return new_hash == stored_hash
-        except:
+            return bcrypt.checkpw(password.encode('utf-8'), stored_hash.encode('utf-8'))
+        except (ValueError, TypeError):
             return False
+
+    def _is_locked_out(self, user: 'User') -> bool:
+        """Check (and lazily clear expired) account lockout state"""
+        if not user.locked_until:
+            return False
+
+        if datetime.fromisoformat(user.locked_until) > datetime.now():
+            return True
+
+        # Lockout window has expired
+        user.locked_until = None
+        user.failed_attempts = 0
+        return False
+
+    def _register_failed_attempt(self, user: 'User'):
+        """Record a failed login and lock the account after too many in a row"""
+        user.failed_attempts = (user.failed_attempts or 0) + 1
+
+        if user.failed_attempts >= self.MAX_FAILED_LOGIN_ATTEMPTS:
+            user.locked_until = (
+                datetime.now() + timedelta(minutes=self.LOCKOUT_DURATION_MINUTES)
+            ).isoformat()
+            self.logger.warning(
+                f"User {user.username} locked out for {self.LOCKOUT_DURATION_MINUTES} "
+                f"minutes after {user.failed_attempts} failed login attempts"
+            )
+
+        self._save_users()
     
     def create_user(self, username: str, password: str, role: str,
                    email: str = "") -> bool:
@@ -233,8 +260,8 @@ class AuthManager:
             self.logger.error(f"Invalid role: {role}")
             return False
         
-        password_hash, _ = self.hash_password(password)
-        
+        password_hash = self.hash_password(password)
+
         user = User(
             username=username,
             password_hash=password_hash,
@@ -251,19 +278,29 @@ class AuthManager:
     def authenticate(self, username: str, password: str, ip_address: str = None) -> Optional[str]:
         """Authenticate user and create session"""
         user = self.users.get(username)
-        
+
         if not user:
             self.logger.warning(f"Authentication failed: user {username} not found")
             return None
-        
+
+        if config.ENABLE_RATE_LIMITING and self._is_locked_out(user):
+            self.logger.warning(f"Authentication blocked: {username} is locked out until {user.locked_until}")
+            return None
+
         if not user.active:
             self.logger.warning(f"Authentication failed: user {username} is inactive")
             return None
-        
+
         if not self.verify_password(password, user.password_hash):
             self.logger.warning(f"Authentication failed: invalid password for {username}")
+            if config.ENABLE_RATE_LIMITING:
+                self._register_failed_attempt(user)
             return None
-        
+
+        # Successful login resets any lockout state
+        user.failed_attempts = 0
+        user.locked_until = None
+
         # Create session
         token = secrets.token_urlsafe(32)
         session = Session(
@@ -327,8 +364,7 @@ class AuthManager:
             self.logger.warning(f"Password change failed: invalid old password for {username}")
             return False
         
-        password_hash, _ = self.hash_password(new_password)
-        user.password_hash = password_hash
+        user.password_hash = self.hash_password(new_password)
         self._save_users()
         
         self.logger.info(f"Password changed for user: {username}")

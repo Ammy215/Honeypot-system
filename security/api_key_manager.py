@@ -36,27 +36,37 @@ class APIKeyManager:
         self.usage_stats = {}
     
     def _load_or_create_master_key(self) -> bytes:
-        """Load or generate master encryption key"""
+        """Load master encryption key.
+
+        Prefers API_KEY_ENCRYPTION_SECRET from the environment so the key
+        never has to live on disk next to the ciphertext it protects. Falls
+        back to a local file only for development convenience (the file is
+        gitignored and should never be relied on outside a single machine).
+        """
+        env_key = os.getenv('API_KEY_ENCRYPTION_SECRET')
+        if env_key:
+            return env_key.encode('utf-8')
+
         if self.master_key_file.exists():
             with open(self.master_key_file, 'rb') as f:
                 return f.read()
-        else:
-            # Generate new master key
-            key = Fernet.generate_key()
-            
-            with open(self.master_key_file, 'wb') as f:
-                f.write(key)
-            
-            # Set file permissions (Unix-like systems)
-            try:
-                os.chmod(self.master_key_file, 0o600)
-            except:
-                pass
-            
-            self.logger.warning(f"New master key created: {self.master_key_file}")
-            self.logger.warning("⚠️  BACKUP THIS FILE SECURELY!")
-            
-            return key
+
+        # Generate new local-dev master key
+        key = Fernet.generate_key()
+
+        with open(self.master_key_file, 'wb') as f:
+            f.write(key)
+
+        # Set file permissions (Unix-like systems)
+        try:
+            os.chmod(self.master_key_file, 0o600)
+        except OSError:
+            pass
+
+        self.logger.warning(f"No API_KEY_ENCRYPTION_SECRET set — generated a local dev key: {self.master_key_file}")
+        self.logger.warning("Set API_KEY_ENCRYPTION_SECRET in your .env for anything beyond local development.")
+
+        return key
     
     def _load_keys(self) -> Dict[str, dict]:
         """Load encrypted API keys"""
@@ -277,7 +287,6 @@ class APIKeyManager:
         """Import API keys from environment variables"""
         env_mappings = {
             'ABUSEIPDB_API_KEY': ('abuseipdb', 'AbuseIPDB API', 1000, 'day'),
-            'OTX_API_KEY': ('otx', 'AlienVault OTX API', 10000, 'hour'),
             'OPENAI_API_KEY': ('openai', 'OpenAI API', 10000, 'day'),
         }
         

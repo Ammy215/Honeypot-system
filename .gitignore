@@ -16,9 +16,7 @@ logs/
 *.log
 
 # Generated reports
-reports/*.txt
-reports/*.pdf
-!reports/.gitkeep
+reports/
 
 # Secrets / runtime auth state (never commit real credentials)
 auth/users.json

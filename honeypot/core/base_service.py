@@ -5,9 +5,11 @@ from abc import ABC, abstractmethod
 from typing import Tuple
 import time
 
+import config
+
 class BaseHoneypotService(ABC):
     """Abstract base class for all honeypot services"""
-    
+
     def __init__(self, port: int, service_name: str, host: str = "0.0.0.0"):
         self.port = port
         self.service_name = service_name
@@ -17,6 +19,8 @@ class BaseHoneypotService(ABC):
         self.connection_count = 0
         self.logger = logging.getLogger(f"honeypot.{service_name}")
         self.thread = None
+        self._active_connections_by_ip = {}
+        self._connections_lock = threading.Lock()
     
     def start(self):
         """Start the honeypot service in a separate thread"""
@@ -38,8 +42,20 @@ class BaseHoneypotService(ABC):
                 try:
                     # Accept incoming connection
                     client_socket, address = self.server_socket.accept()
+
+                    if not self._register_connection(address[0]):
+                        self.logger.warning(
+                            f"Rejected connection from {address[0]}: "
+                            f"per-IP connection limit ({config.MAX_CONNECTIONS_PER_IP}) reached"
+                        )
+                        try:
+                            client_socket.close()
+                        except OSError:
+                            pass
+                        continue
+
                     client_socket.settimeout(30)  # 30 second timeout
-                    
+
                     # Handle connection in separate thread
                     handler_thread = threading.Thread(
                         target=self._handle_connection_wrapper,
@@ -48,7 +64,7 @@ class BaseHoneypotService(ABC):
                     )
                     handler_thread.start()
                     self.connection_count += 1
-                    
+
                 except socket.timeout:
                     continue
                 except Exception as e:
@@ -69,10 +85,29 @@ class BaseHoneypotService(ABC):
         except Exception as e:
             self.logger.error(f"Connection handler error from {address[0]}: {e}")
         finally:
+            self._release_connection(address[0])
             try:
                 client_socket.close()
-            except:
+            except OSError:
                 pass
+
+    def _register_connection(self, ip: str) -> bool:
+        """Track an active connection for an IP, rejecting it if over the per-IP cap"""
+        with self._connections_lock:
+            count = self._active_connections_by_ip.get(ip, 0)
+            if count >= config.MAX_CONNECTIONS_PER_IP:
+                return False
+            self._active_connections_by_ip[ip] = count + 1
+            return True
+
+    def _release_connection(self, ip: str):
+        """Release a tracked connection slot for an IP"""
+        with self._connections_lock:
+            count = self._active_connections_by_ip.get(ip, 0)
+            if count <= 1:
+                self._active_connections_by_ip.pop(ip, None)
+            else:
+                self._active_connections_by_ip[ip] = count - 1
     
     def stop(self):
         """Stop the honeypot service"""

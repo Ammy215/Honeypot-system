@@ -13,7 +13,6 @@ print("🔑 Importing API keys from .env...\n")
 # Get keys from .env
 abuseipdb_key = os.getenv("ABUSEIPDB_API_KEY")
 openai_key = os.getenv("OPENAI_API_KEY")
-otx_key = os.getenv("OTX_API_KEY")
 
 # Import AbuseIPDB
 if abuseipdb_key and abuseipdb_key not in ["your_key_here", "managed_by_security", "PASTE_YOUR_KEY_HERE", "skip_this"]:
@@ -40,19 +39,6 @@ if openai_key and openai_key not in ["your_key_here", "managed_by_security", "PA
     print("✅ OpenAI key imported!")
 else:
     print("⚪ OpenAI key skipped")
-
-# Skip OTX
-if otx_key and otx_key not in ["your_key_here", "managed_by_security", "PASTE_YOUR_KEY_HERE", "skip_this"]:
-    api_key_manager.add_key(
-        service="otx",
-        api_key=otx_key,
-        description="AlienVault OTX",
-        rate_limit=10000,
-        rate_period="hour"
-    )
-    print("✅ OTX key imported!")
-else:
-    print("⚪ OTX key skipped")
 
 print("\n✅ Done! Keys are now encrypted and saved.")
 print("\nYou can now run:")

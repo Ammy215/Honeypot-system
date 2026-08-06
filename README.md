@@ -1,252 +1,147 @@
 # 🍯 HoneyShield Intelligence Platform
 
-Advanced honeypot trap system and threat intelligence platform built for learning cybersecurity fundamentals.
+A multi-protocol honeypot and threat-intelligence platform: it attracts, captures, analyzes, and visualizes attacker behavior across SSH, FTP, HTTP, and Telnet — built from raw Python sockets and SQLite, with an AI-assisted analyst and a Streamlit SOC dashboard on top.
 
-## Overview
-
-HoneyShield is a complete honeypot platform that attracts, captures, analyzes, and visualizes attacker behavior. Built entirely from scratch using raw Python sockets, SQLite, and modern data visualization tools.
+> Educational security tool for a single operator. See [Security Notes](#security-notes) before deploying anywhere network-reachable.
 
 ## Technology Stack
 
-- **Core Language**: Python 3.8+
-- **Networking**: Raw Python socket programming (TCP)
-- **Database**: SQLite with raw SQL (no ORM)
+- **Core Language**: Python 3.13+ (raw TCP socket programming, no web framework)
+- **Database**: SQLite, hand-written SQL (no ORM), optional pooled/WAL "production" mode
 - **Dashboard**: Streamlit + Plotly
 - **Data Analysis**: Pandas
-- **Threat Intelligence**: AbuseIPDB, AlienVault OTX, ip-api.com
-- **AI Analysis**: OpenAI GPT-4 + LangChain
+- **Threat Intelligence**: AbuseIPDB, ip-api.com (free, no key)
+- **AI Analysis**: OpenAI (`gpt-4o-mini` by default), called directly via the `openai` SDK
+- **Security**: `bcrypt` password hashing, `cryptography.Fernet`-encrypted API key vault
 
 ## Features
 
-### Phase 1 - Foundation ✅
-- [x] Raw TCP socket-based honeypot services
-- [x] SSH honeypot (port 2222)
-- [x] SQLite database with full schema
-- [x] Connection logging and tracking
-- [x] Multithreaded connection handling
-- [x] Structured logging to console and file
+- **Honeypot services**: SSH (2222), FTP (2121), HTTP (8080), Telnet (2323) with realistic fake banners. SMTP/RDP are defined but intentionally left disabled.
+- **Detection**: brute-force detection (9 rules), multi-service correlation, attack-campaign detection (4 types)
+- **Threat intelligence**: geolocation, AbuseIPDB reputation, IOC list matching, weighted threat scoring (18 factors, 0–100)
+- **Dashboard**: Live Feed, Attacker Intel (map), Analytics, Alerts, Threat Hunting, Campaigns, AI Analysis — behind role-based login
+- **AI Analyst**: GPT-generated attacker analysis, threat reports, and executive summaries
+- **Auth**: admin/analyst/viewer roles, bcrypt-hashed passwords, session lockout after repeated failed logins
 
-### Phase 2 - Login Trap & Detection ✅
-- [x] FTP honeypot (port 2121)
-- [x] Telnet honeypot (port 2323)
-- [x] HTTP honeypot (port 8080)
-- [x] Credential capture system
-- [x] Brute force detection (9 detection rules)
-- [x] Alert generation engine with Rich formatting
-- [x] Real-time threat detection
-- [x] Multi-service attack correlation
-
-### Phase 3 - Threat Intelligence ✅
-- [x] IP geolocation enrichment (ip-api.com)
-- [x] AbuseIPDB reputation checks
-- [x] Weighted threat scoring (0-100, 18 factors)
-- [x] IOC detection and management
-- [x] Automatic enrichment pipeline
-- [x] Threat verdict classification (4 levels)
-- [x] Background enrichment processing
-
-### Phase 4 - Dashboard ✅
-- [x] Streamlit multi-page application (5 pages)
-- [x] Real-time attack feed with auto-refresh
-- [x] Interactive world map with attack origins
-- [x] Attacker intelligence profiles with IP search
-- [x] Analytics with 7 Plotly chart types
-- [x] Alert management interface
-- [x] CSV data export
-- [x] Advanced filters and sorting
-
-### Phase 5 - Correlation Engine ✅
-- [x] Attack campaign detection (4 types)
-- [x] Behavioral correlation engine
-- [x] Attack chain detection
-- [x] Similar attacker identification
-- [x] Threat hunting interface
-- [x] IOC search capabilities
-- [x] Campaign visualization dashboard
-
-### Phase 6 - AI Analyst ✅
-- [x] OpenAI GPT-4 integration
-- [x] AI-powered attacker analysis
-- [x] Automated threat reports
-- [x] Natural language alert summaries
-- [x] Executive summary generation
-- [x] Report export (text files)
-- [x] AI Analysis dashboard page
+See [CHANGELOG.md](CHANGELOG.md) for how these were built up in phases.
 
 ## Installation
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd honeypot-trap-system
+git clone https://github.com/Ammy215/Honeypot-system.git
+cd Honeypot-system
 
-# Install dependencies
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+
 pip install -r requirements.txt
 
-# Copy and configure environment variables
-cp .env.example .env
-# Edit .env and add your API keys
-
-# Initialize database
-python -c "from database.db import init_db; init_db()"
+cp .env.example .env             # then fill in your API keys — see docs/GET_API_KEYS_GUIDE.md
 ```
+
+The database initializes automatically on first run.
 
 ## Usage
 
-### Start the Honeypot
+### Start the honeypot
 
 ```bash
 python main.py
 ```
 
-The honeypot will start listening on configured ports:
-- SSH: port 2222
-- FTP: port 2121
-- HTTP: port 8080
-- Telnet: port 2323
-
-### Test Connection
+Listens on: SSH `2222`, FTP `2121`, HTTP `8080`, Telnet `2323`.
 
 ```bash
-# Test SSH honeypot
-nc localhost 2222
-
-# Test FTP honeypot
-nc localhost 2121
-USER admin
-PASS admin
-
-# Test HTTP honeypot (browser or curl)
-curl http://localhost:8080/admin
-
-# Test Telnet honeypot
-nc localhost 2323
+# Try it out
+nc localhost 2222                     # SSH honeypot
+nc localhost 2121                     # FTP honeypot — try USER admin / PASS admin
+curl http://localhost:8080/admin      # HTTP honeypot
+nc localhost 2323                     # Telnet honeypot
 ```
 
-### View Database
+### Start the dashboard
 
 ```bash
-# Check connections
-sqlite3 data/honeypot.db "SELECT * FROM connections ORDER BY timestamp DESC LIMIT 10;"
-
-# Check attackers
-sqlite3 data/honeypot.db "SELECT * FROM attackers;"
-```
-
-### Start Dashboard
-
-```bash
-# Start the interactive web dashboard
-python -m streamlit run dashboard/app.py
-
-# or if streamlit is in PATH
 streamlit run dashboard/app.py
 ```
 
-Visit `http://localhost:8501` to view the dashboard.
+Visit `http://localhost:8501`. On first run, a default `admin` account is created and its one-time password is **printed to the console only** — it is never written to disk, so save it immediately and change it after logging in.
 
-**Dashboard Features:**
-- 🔴 Live Feed - Real-time attack monitoring
-- 🌍 Attacker Intel - IP profiles and world map
-- 📈 Analytics - Charts and trend analysis
-- 🚨 Alerts - Security alert management
+### Inspect the database directly
+
+```bash
+sqlite3 data/honeypot.db "SELECT * FROM connections ORDER BY timestamp DESC LIMIT 10;"
+```
+
+See [docs/VIEW_DATABASE_GUIDE.md](docs/VIEW_DATABASE_GUIDE.md) for more.
 
 ## Project Structure
 
 ```
-honeypot-trap-system/
-├── honeypot/              # Core honeypot services
-│   ├── core/              # Base classes and server manager
-│   ├── services/          # Individual honeypot services
-│   ├── detectors/         # Threat detection engines
-│   ├── intelligence/      # Threat intel integrations
-│   ├── alerting/          # Alert generation and rules
-│   └── ai/                # AI-powered analysis
-├── database/              # Database layer
-│   ├── schema.sql         # Full database schema
-│   ├── db.py              # Connection and query manager
-│   └── queries/           # Organized query modules
-├── dashboard/             # Streamlit dashboard
-│   ├── app.py             # Main entry point
-│   ├── pages/             # Dashboard pages
-│   └── components/        # Reusable UI components
-├── logs/                  # Application logs
-├── data/                  # SQLite database file
-├── ioc/                   # IOC lists
-├── config.py              # Configuration constants
-├── main.py                # Application entry point
-└── requirements.txt       # Python dependencies
+.
+├── honeypot/               # Core honeypot services
+│   ├── core/               # Base service class + server orchestrator
+│   ├── services/           # SSH / FTP / HTTP / Telnet honeypots
+│   ├── detectors/          # Brute-force, correlation, campaign detection
+│   ├── intelligence/       # Geolocation, AbuseIPDB, threat scoring, IOC
+│   ├── alerting/           # Alert generation
+│   └── ai/                 # AI-powered analysis and report generation
+├── database/                # Schema, migrations, connection managers
+├── dashboard/                # Streamlit app + pages
+├── auth/                     # RBAC, bcrypt hashing, sessions
+├── security/                  # Encrypted API key vault, audit logging
+├── scripts/                   # Operational scripts (setup, security/system checks)
+├── tests/                      # Integration-style smoke tests
+├── docs/                        # Deployment, API keys, DB inspection, architecture guides
+├── config.py                     # Central configuration
+└── main.py                       # Honeypot entry point
 ```
 
 ## Database Schema
 
-- **attackers**: Core attacker identity and profile
-- **connections**: Every TCP connection attempt
-- **login_attempts**: All credential attempts
-- **attacker_commands**: Commands sent by attackers
-- **alerts**: Generated security alerts
-- **ai_reports**: AI-generated threat reports
-- **service_stats**: Service activity tracking
-- **ioc_matches**: Known IOC matches
+SQLite, file at `data/honeypot.db`:
+
+| Table | Purpose |
+|---|---|
+| `attackers` | Per-IP profile: enrichment, threat score, verdict |
+| `connections` | Every TCP connection attempt |
+| `login_attempts` | Every credential attempt |
+| `attacker_commands` | Commands typed by attackers post-"login" |
+| `alerts` | Generated security alerts |
+| `ai_reports` | Stored AI-generated analyses |
+| `service_stats` | Per-service activity counters |
+| `ioc_matches` | IOC list matches |
 
 ## Configuration
 
-Edit `config.py` to customize:
-- Service ports and enabled status
-- Detection thresholds
-- API endpoints
-- Connection limits
-- Logging levels
+All settings live in `config.py`, populated from `.env` (see `.env.example`). Key flags:
 
-## API Keys
+| Variable | Purpose |
+|---|---|
+| `ABUSEIPDB_API_KEY` | IP reputation lookups (free tier available) |
+| `OPENAI_API_KEY` / `OPENAI_MODEL` | AI Analyst |
+| `API_KEY_ENCRYPTION_SECRET` | Encrypts the API key vault — required outside local dev |
+| `ENABLE_AUTHENTICATION`, `ENABLE_RATE_LIMITING`, `ENABLE_AUDIT_LOGGING` | Security toggles |
+| `USE_PRODUCTION_DB`, `DB_POOL_SIZE` | Connection pooling / WAL mode |
 
-Required for full functionality:
-- **AbuseIPDB**: Get free key at https://www.abuseipdb.com/
-- **AlienVault OTX**: Get free key at https://otx.alienvault.com/
-- **OpenAI**: Required for AI analyst features
-
-Add keys to `.env` file.
+Get API keys: see [docs/GET_API_KEYS_GUIDE.md](docs/GET_API_KEYS_GUIDE.md).
 
 ## Security Notes
 
-⚠️ **Important**: This is a honeypot system designed to attract attacks.
+⚠️ This is a honeypot — it's designed to attract attacks against its fake services, but the **dashboard is a real, authenticated admin panel** and should be treated like one:
 
-- Run in isolated network environment
-- Do not expose to production networks
-- Use non-standard ports (2222, 2121, etc.) to avoid requiring root
-- Monitor resource usage
-- Review captured data regularly
+- Run the honeypot listeners in an isolated network segment; don't expose the *dashboard* port directly to the internet without a reverse proxy + HTTPS
+- Non-standard honeypot ports (2222, 2121, etc.) avoid needing root
+- The API key vault's encryption key (`API_KEY_ENCRYPTION_SECRET`) and `.env` must never be committed — both are gitignored
+- Dashboard login locks an account for 15 minutes after 5 failed attempts
+- Review `logs/audit.log` and `logs/honeypot.log` regularly
 
-## Learning Objectives
-
-This project teaches:
-1. Raw TCP socket programming in Python
-2. Multithreaded network service design
-3. SQLite database design and raw SQL
-4. Security threat detection algorithms
-5. API integration for threat intelligence
-6. Data visualization with Plotly
-7. Real-time dashboards with Streamlit
-8. AI integration for security analysis
-
-## Development Phases
-
-Each phase builds incrementally:
-1. **Foundation**: Sockets + Database + Logging
-2. **Login Trap**: Multiple services + Detection
-3. **Intelligence**: API integration + Scoring
-4. **Dashboard**: Visualization + Real-time UI
-5. **Correlation**: Advanced detection + Hunting
-6. **AI Analyst**: OpenAI + Automated reports
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for a fuller deployment checklist.
 
 ## License
 
-MIT License - See LICENSE file for details
-
-## Contributing
-
-This is a learning project. Contributions welcome!
+MIT — see [LICENSE](LICENSE).
 
 ## Disclaimer
 
-This software is for educational purposes only. Use responsibly and ethically. The authors are not responsible for misuse or damage caused by this software.
+For educational and authorized security-research use only. Use responsibly and ethically; the authors are not responsible for misuse.

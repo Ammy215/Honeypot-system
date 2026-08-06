@@ -185,7 +185,7 @@ def test_authentication(results):
                 results.add_fail("Auth: Admin", "No admin user found")
         
         # Test password hashing
-        test_hash, _ = auth_manager.hash_password("test123")
+        test_hash = auth_manager.hash_password("test123")
         if auth_manager.verify_password("test123", test_hash):
             console.print("  ✅ Password hashing works")
             results.add_pass("Auth: Password hashing")

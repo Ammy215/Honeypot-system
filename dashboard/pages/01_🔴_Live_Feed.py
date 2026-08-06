@@ -64,25 +64,28 @@ col1, col2, col3, col4 = st.columns(4)
 try:
     # Get metrics
     if hours_back:
-        time_clause = f"AND timestamp >= datetime('now', '-{hours_back} hours')"
+        time_clause = "AND timestamp >= datetime('now', ?)"
+        time_params = (f"-{hours_back} hours",)
     else:
         time_clause = ""
-    
+        time_params = ()
+
     # Recent connections
     query = f"SELECT COUNT(*) as cnt FROM connections WHERE 1=1 {time_clause}"
-    result = db.execute_query(query)
+    result = db.execute_query(query, time_params)
     recent_connections = result[0]['cnt'] if result else 0
-    
+
     # Unique attackers
     query = f"SELECT COUNT(DISTINCT ip_address) as cnt FROM connections WHERE 1=1 {time_clause}"
-    result = db.execute_query(query)
+    result = db.execute_query(query, time_params)
     unique_attackers = result[0]['cnt'] if result else 0
-    
+
     # Recent alerts
-    query = f"SELECT COUNT(*) as cnt FROM alerts WHERE acknowledged = 0 {time_clause.replace('timestamp', 'alerts.timestamp')}"
-    result = db.execute_query(query)
+    alerts_time_clause = time_clause.replace('timestamp', 'alerts.timestamp')
+    query = f"SELECT COUNT(*) as cnt FROM alerts WHERE acknowledged = 0 {alerts_time_clause}"
+    result = db.execute_query(query, time_params)
     active_alerts = result[0]['cnt'] if result else 0
-    
+
     # Critical threats
     query = f"SELECT COUNT(*) as cnt FROM attackers WHERE verdict = 'CRITICAL'"
     result = db.execute_query(query)
@@ -110,16 +113,20 @@ st.subheader("📡 Recent Connections")
 
 try:
     # Build query with filters
+    feed_params = []
+
     service_filter_clause = ""
     if service_filter:
-        services_str = "','".join(service_filter)
-        service_filter_clause = f"AND c.service_name IN ('{services_str}')"
-    
+        placeholders = ",".join("?" for _ in service_filter)
+        service_filter_clause = f"AND c.service_name IN ({placeholders})"
+        feed_params.extend(service_filter)
+
     if hours_back:
-        time_clause = f"AND c.timestamp >= datetime('now', '-{hours_back} hours')"
+        time_clause = "AND c.timestamp >= datetime('now', ?)"
+        feed_params.append(f"-{hours_back} hours")
     else:
         time_clause = ""
-    
+
     query = f"""
         SELECT 
             c.timestamp,
@@ -145,8 +152,8 @@ try:
         LIMIT 100
     """
     
-    results = db.execute_query(query)
-    
+    results = db.execute_query(query, tuple(feed_params))
+
     if results:
         # Convert to DataFrame
         df = pd.DataFrame([dict(row) for row in results])
