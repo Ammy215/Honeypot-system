@@ -1,0 +1,10 @@
+# Known Bad IP Addresses - IOC List
+# One IP address per line
+# Lines starting with # are comments
+#
+# Example format:
+# 192.168.1.100
+# 10.0.0.50
+#
+# Add known malicious IPs below:
+192.0.2.1

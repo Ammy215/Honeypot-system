@@ -1,0 +1,45 @@
+# Environment
+.env
+venv/
+env/
+*.pyc
+__pycache__/
+
+# Database
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# Generated reports
+reports/*.txt
+reports/*.pdf
+!reports/.gitkeep
+
+# Secrets / runtime auth state (never commit real credentials)
+auth/users.json
+auth/default_credentials.txt
+auth/sessions.json
+security/.master_key
+security/api_keys.enc
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.venv/
