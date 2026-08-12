@@ -138,6 +138,66 @@ Get API keys: see [docs/GET_API_KEYS_GUIDE.md](docs/GET_API_KEYS_GUIDE.md).
 
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for a fuller deployment checklist.
 
+## Future Work / Deferred
+
+The current deployment is a **deliberately constrained one, not the final
+architecture.** This section records what was built but isn't yet deployed, so the
+gap is a documented decision rather than an unexplained inconsistency.
+
+### Current deployment: HTTP only
+
+Only the **HTTP honeypot (port 8080)** is deployed, to a free no-card PaaS tier. Free
+PaaS tiers route HTTP/HTTPS only — they don't provide raw TCP socket access — so the
+SSH, FTP, and Telnet services can't run there.
+
+**All four services remain in the codebase, fully built and tested.** Only the hosting
+is missing. Everything else runs against real live traffic: credential capture,
+brute-force and credential-stuffing detection, rapid-fire detection, geolocation,
+AbuseIPDB and OTX enrichment, threat scoring, campaign detection, alerting, the AI
+analyst, and the dashboard.
+
+### Deferred: full 4-service deployment
+
+| Deferred item | Why it's blocked | What unblocks it |
+|---|---|---|
+| SSH (2222), FTP (2121), Telnet (2323) | Need raw TCP sockets on a routable public IP | Any VPS, or a spare dedicated device |
+| `multi_service` detection | Needs 2+ live services to correlate across | Same as above — activates automatically |
+| `multi_service_targeting` score weight (15) | Same | Same |
+
+- **SSH is the highest-value missing service** — the most-attacked protocol on the
+  public internet, and the richest source of credential data by a wide margin.
+- **Telnet** matters for a different reason: it's where IoT and Mirai-family botnets
+  concentrate, so it captures a distinct attacker population rather than more of the
+  same traffic.
+- **Multi-service detection and its scoring weight are implemented and tested**, not
+  stubbed or disabled. Nothing needs to be written or re-enabled — both begin firing
+  automatically the moment a second service is reachable.
+
+### Expected traffic volume
+
+A PaaS hostname is not IP-addressable. Mass scanners sweep IPv4 ranges and connect to
+*addresses*, but a PaaS app sits behind a shared edge that routes by Host/SNI, so
+IP-based scans never reach it. Real traffic arrives instead from Certificate
+Transparency log harvesters (the TLS cert is published within minutes of deploy) and
+from hostname-based path scanning for `/wp-admin`, `/.env`, `/phpmyadmin` — which is
+precisely what the HTTP decoys are built to catch.
+
+Expect **dozens of hits per 48 hours, not thousands.** A sparse database during the
+validation window is the expected result, not a broken pipeline.
+
+### Deployment scaffolding is already written
+
+The [`deploy/`](deploy/) directory — systemd unit files, `deploy.sh`, and
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — is written for the **full four-service
+deployment** and stays in the repo unchanged. It isn't dead code; it becomes usable
+as-is the moment VPS or dedicated hardware exists.
+
+### Also deferred (unrelated to hosting)
+
+- **Dashboard rewrite** — replacing Streamlit with **React 18 + Vite + Tailwind +
+  shadcn/ui**.
+- **Cyber-range attack/defend rooms module.**
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
