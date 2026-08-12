@@ -166,11 +166,13 @@ inside `forwarded_for_raw`.
 
 ## 7. Connect the local dashboard
 
-The dashboard is never deployed. Run it locally against the same database:
+The dashboard is never deployed. Run it locally against the same database, using a
+**third role** — `honeyshield_dashboard`, from
+[database/grants_dashboard.sql](../database/grants_dashboard.sql) — not `honeyshield_app`:
 
 ```bash
 # in your local .env
-DATABASE_URL=postgresql://honeyshield_app:<pw>@<host>:5432/postgres
+DATABASE_URL=postgresql://honeyshield_dashboard.<project-ref>:<pw>@<pooler-host>:5432/postgres
 DB_SSL_MODE=require
 SKIP_SCHEMA_INIT=true
 
@@ -180,11 +182,20 @@ streamlit run dashboard/app.py
 This is strictly safer than the original Cloudflare Tunnel plan — the dashboard has
 no public surface at all.
 
-> The dashboard needs `INSERT` on `ai_reports` and `UPDATE` on `alerts`
-> (acknowledgement), both of which `honeyshield_app` already has. It also needs
-> `admin_users` for login — which that role is deliberately denied. Either run the
-> dashboard under the owner credential locally, or grant a separate dashboard role
-> access to `admin_users` only.
+> `honeyshield_app` (the deployed honeypot) deliberately has zero access to
+> `admin_users` — a compromised internet-facing process shouldn't be able to read
+> dashboard password hashes or create itself an account. But the dashboard genuinely
+> needs `SELECT`/`INSERT`/`UPDATE` on `admin_users` for login/lockout/bootstrap, plus
+> read access across the operational tables and `INSERT` on `ai_reports`. Running it
+> under the DB owner would work but hands a local Streamlit process far more than it
+> needs (`DROP`/`ALTER`/`DELETE` on everything). `honeyshield_dashboard` is scoped to
+> exactly what's evidenced by grepping every `db.*` call reachable from a dashboard
+> page load — including the AI analyst and campaign correlation, which run under this
+> same connection when triggered from a page. Verified end-to-end against the real
+> database: `auth/async_admin_auth.py`'s actual `bootstrap_admin_if_needed()` and
+> `authenticate()` (correct password, wrong password, nonexistent user), plus
+> `list_attackers`, `summary_counts`, and `record_ai_report`/`list_ai_reports_for_ip` —
+> all through RLS, not just checked against the grant table.
 
 ## 8. Live validation window (24–48 h)
 
