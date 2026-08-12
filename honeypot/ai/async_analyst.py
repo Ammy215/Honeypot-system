@@ -2,7 +2,7 @@
 AI analyst — HoneyShield v2 (asyncio), direct Google Gemini SDK call, no
 LangChain. Originally built against OpenAI (HONEYSHIELD_PROJECT.md section
 3 says "drop LangChain, call OpenAI SDK directly") — swapped to Gemini
-(google-genai, gemini-2.5-flash) per explicit instruction; same direct-SDK
+(google-genai, model configurable via GEMINI_MODEL) per explicit instruction; same direct-SDK
 principle, different provider.
 
 Generates a threat report for one captured attacker from real DB data
@@ -166,7 +166,13 @@ async def generate_attacker_report(ip_address: str) -> Dict:
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
                 temperature=0.2,
-                max_output_tokens=600,
+                max_output_tokens=2000,
+                # This model's "thinking" tokens count against max_output_tokens, and
+                # were eating the whole budget before any report text came out
+                # (thoughts_token_count=572/600, response cut off at 24 tokens).
+                # thinking_budget=0 to disable it outright 400s on this model, so the
+                # fix is generous headroom instead — 2000 comfortably covers thinking
+                # plus an 800-ish-token report.
             ),
         )
         report_text = (response.text or "").strip()

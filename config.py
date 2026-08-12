@@ -31,7 +31,7 @@ LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 ABUSEIPDB_API_KEY = os.getenv("ABUSEIPDB_API_KEY")
 OTX_API_KEY = os.getenv("OTX_API_KEY")  # re-introduced in v2 phase 3 — actually used this time
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # AI analyst (phase 6) — swapped from OpenAI to Gemini
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")  # gemini-2.5-flash 404s for new keys; -latest tracks Google's current recommended flash model
 
 # ── Geolocation ──────────────────────────────────────────
 GEOIP_API_URL = "http://ip-api.com/json"   # Free, no key needed
