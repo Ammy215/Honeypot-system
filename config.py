@@ -14,6 +14,44 @@ SERVICES = {
     "RDP":    {"port": 3389,  "enabled": False},  # Enable in phase 2
 }
 
+# ── Deployment / hosting (Option A: HTTP-only on a free PaaS) ──
+# PaaS platforms inject the port to bind as $PORT and route only that one
+# port. Falls back to the local-dev port above when $PORT isn't set.
+HTTP_PORT = int(os.getenv("PORT") or SERVICES["HTTP"]["port"])
+
+# Which services main.py starts. Free PaaS tiers route HTTP only (no raw TCP),
+# so production sets ENABLED_SERVICES=HTTP; local dev defaults to all four.
+# SSH/FTP/Telnet are gated here, never removed — see README "Future Work".
+ENABLED_SERVICES = [
+    name.strip().upper()
+    for name in os.getenv("ENABLED_SERVICES", "SSH,FTP,TELNET,HTTP").split(",")
+    if name.strip()
+]
+
+# ── Reverse-proxy / load-balancer client IP resolution ────
+# Behind a PaaS load balancer the socket peer address is the balancer, not the
+# attacker — every attacker would record as the same IP, making geolocation,
+# reputation, scoring and campaign detection meaningless. Enable in production.
+# MUST stay off for direct exposure: with no trusted proxy in front, these
+# headers are entirely attacker-controlled and trusting them lets an attacker
+# forge their own source IP.
+TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "false").lower() == "true"
+
+# A single-value header the platform sets itself (e.g. CF-Connecting-IP).
+# Preferred when the platform offers one: unlike X-Forwarded-For it is not a
+# list, so attacker-supplied entries can't pollute it. Empty = not available.
+TRUSTED_CLIENT_IP_HEADER = os.getenv("TRUSTED_CLIENT_IP_HEADER", "").strip().lower()
+
+# Fallback list-valued header. Proxies *append*, so an attacker who sends their
+# own value gets it pushed leftward — the trustworthy entry is counted from the
+# right, never the left. See honeypot/core/client_ip.py.
+FORWARDED_IP_HEADER = os.getenv("FORWARDED_IP_HEADER", "x-forwarded-for").strip().lower()
+
+# How many proxy hops we actually control. Each appends exactly one entry, so
+# the real client sits this many positions from the right-hand end.
+# 1 = bare PaaS load balancer. 2 = Cloudflare in front of the PaaS.
+TRUSTED_PROXY_HOPS = int(os.getenv("TRUSTED_PROXY_HOPS", "1"))
+
 # ── Database (v1, legacy dashboard/auth — unchanged) ─────
 DATABASE_PATH = "data/honeypot.db"
 
@@ -75,6 +113,17 @@ DASHBOARD_RATE_LIMIT = int(os.getenv("DASHBOARD_RATE_LIMIT", "100"))  # Requests
 # ── Production Database ──────────────────────────────────
 USE_PRODUCTION_DB = os.getenv("USE_PRODUCTION_DB", "true").lower() == "true"
 DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))
+
+# TLS for the Postgres connection. asyncpg negotiates but does not *require*
+# TLS by default, so this is set explicitly. "require" encrypts without
+# verifying the server cert; "verify-full" also checks the chain + hostname
+# and is the stronger setting when a CA bundle is available.
+DB_SSL_MODE = os.getenv("DB_SSL_MODE", "require")
+
+# The production DB user is least-privilege (SELECT/INSERT/UPDATE only) and
+# cannot run CREATE TABLE. Apply database/schema_postgres.sql once as the DB
+# owner, then set this so startup skips init_schema().
+SKIP_SCHEMA_INIT = os.getenv("SKIP_SCHEMA_INIT", "false").lower() == "true"
 
 # ── IOC ──────────────────────────────────────────────────
 IOC_FILE_PATH = "ioc/known_bad_ips.txt"

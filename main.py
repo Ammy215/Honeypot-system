@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 HoneyShield Intelligence Platform — v2 (asyncio rebuild)
-Entry point for the async honeypot core. Per HONEYSHIELD_PROJECT.md,
-Phase 1 starts only the SSH listener; FTP/HTTP/Telnet are converted to
-asyncio in Phase 2.
+Entry point for the async honeypot core.
+
+Which listeners start is controlled by ENABLED_SERVICES (config.py), defaulting
+to all four locally. The deployed environment sets ENABLED_SERVICES=HTTP.
 """
 
 import asyncio
@@ -58,11 +59,38 @@ async def run():
     await db.init_schema()
     console.print(f"[green]✓[/green] Database ready ({db.backend})\n")
 
-    services = [SSHHoneypot(), FTPHoneypot(), TelnetHoneypot(), HTTPHoneypot()]
+    # All four services stay wired up unconditionally; ENABLED_SERVICES only
+    # gates which ones actually listen. Production runs HTTP alone because free
+    # PaaS tiers route HTTP and not raw TCP — see README "Future Work". Local
+    # dev defaults to all four.
+    available = {
+        "SSH": SSHHoneypot,
+        "FTP": FTPHoneypot,
+        "TELNET": TelnetHoneypot,
+        "HTTP": HTTPHoneypot,
+    }
+
+    unknown = [name for name in config.ENABLED_SERVICES if name not in available]
+    if unknown:
+        raise ValueError(
+            f"ENABLED_SERVICES contains unknown service(s): {', '.join(unknown)}. "
+            f"Valid values: {', '.join(available)}"
+        )
+
+    services = [available[name]() for name in config.ENABLED_SERVICES]
+    if not services:
+        raise ValueError("ENABLED_SERVICES is empty — nothing to listen on.")
 
     console.print("[bold cyan]Starting services:[/bold cyan]")
     for service in services:
         console.print(f"  • [green]{service.service_name}[/green] on port [yellow]{service.port}[/yellow]")
+
+    skipped = [name for name in available if name not in config.ENABLED_SERVICES]
+    if skipped:
+        console.print(
+            f"  [dim]Not started (ENABLED_SERVICES): {', '.join(skipped)} — "
+            f"built and tested, gated for this deployment[/dim]"
+        )
 
     console.print("\n[bold green]All systems operational![/bold green]")
     console.print("[dim]Press Ctrl+C to stop[/dim]\n")

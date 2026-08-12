@@ -30,8 +30,16 @@ CREATE TABLE IF NOT EXISTS connections (
     connected_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     disconnected_at TIMESTAMPTZ,
     bytes_sent    INT DEFAULT 0,
-    bytes_received INT DEFAULT 0
+    bytes_received INT DEFAULT 0,
+    -- Raw proxy forwarding header, verbatim, when running behind a load
+    -- balancer. ip_address above holds the *resolved* client. Kept because a
+    -- spoofed X-Forwarded-For is itself attacker intel: it shows an attempt to
+    -- forge a source IP. Inert text, never parsed for trust decisions.
+    forwarded_for_raw TEXT
 );
+
+-- Migration for databases created before forwarded_for_raw existed.
+ALTER TABLE connections ADD COLUMN IF NOT EXISTS forwarded_for_raw TEXT;
 
 CREATE TABLE IF NOT EXISTS login_attempts (
     id            BIGSERIAL PRIMARY KEY,

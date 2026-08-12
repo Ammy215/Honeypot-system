@@ -33,8 +33,17 @@ class AsyncDatabase:
         """Establish the backend connection (pool for Postgres; no-op for SQLite)."""
         if self.backend == "postgres":
             import asyncpg
-            self._pg_pool = await asyncpg.create_pool(config.DATABASE_URL)
-            logger.info("Connected to PostgreSQL")
+            # TLS is required explicitly, not left to negotiation. asyncpg
+            # defaults to "prefer": it will happily fall back to an unencrypted
+            # connection if the server doesn't offer TLS, which would put
+            # captured credentials on the wire in cleartext. "require" refuses
+            # to connect without encryption; "verify-full" additionally checks
+            # the certificate chain and hostname.
+            self._pg_pool = await asyncpg.create_pool(
+                config.DATABASE_URL,
+                ssl=config.DB_SSL_MODE,
+            )
+            logger.info(f"Connected to PostgreSQL (ssl={config.DB_SSL_MODE})")
         else:
             logger.info(f"Using local SQLite dev database: {self._sqlite_path}")
 
@@ -43,7 +52,18 @@ class AsyncDatabase:
             await self._pg_pool.close()
 
     async def init_schema(self):
-        """Create all tables/indexes if they don't already exist."""
+        """
+        Create all tables/indexes if they don't already exist.
+
+        Skipped in production (SKIP_SCHEMA_INIT=true): the production Postgres
+        user is least-privilege — SELECT/INSERT/UPDATE only — and cannot run
+        CREATE TABLE. Apply database/schema_postgres.sql once as the database
+        owner instead; see database/grants_production.sql.
+        """
+        if config.SKIP_SCHEMA_INIT:
+            logger.info("SKIP_SCHEMA_INIT set — leaving schema management to the DB owner")
+            return
+
         if self.backend == "postgres":
             schema_sql = Path("database/schema_postgres.sql").read_text(encoding="utf-8")
             async with self._pg_pool.acquire() as conn:
@@ -51,8 +71,23 @@ class AsyncDatabase:
         else:
             schema_sql = Path("database/schema_sqlite_dev.sql").read_text(encoding="utf-8")
             await self._run_sqlite(lambda conn: conn.executescript(schema_sql))
+            await self._migrate_sqlite()
 
         logger.info(f"Database schema initialized ({self.backend})")
+
+    async def _migrate_sqlite(self):
+        """
+        Add columns introduced after a dev database was first created. SQLite
+        has no ADD COLUMN IF NOT EXISTS, so existing columns are checked first.
+        Postgres handles the equivalent inline in schema_postgres.sql.
+        """
+        def _work(conn: sqlite3.Connection):
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(connections)")}
+            if "forwarded_for_raw" not in existing:
+                conn.execute("ALTER TABLE connections ADD COLUMN forwarded_for_raw TEXT")
+                logger.info("Migrated SQLite dev DB: added connections.forwarded_for_raw")
+
+        await self._run_sqlite(_work)
 
     def _sqlite_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._sqlite_path)
@@ -74,8 +109,17 @@ class AsyncDatabase:
 
         return await loop.run_in_executor(None, _work)
 
-    async def record_connection(self, ip_address: str, service: str, port: int) -> int:
-        """Upsert the attacker row and insert a connections row. Returns the new connection id."""
+    async def record_connection(
+        self, ip_address: str, service: str, port: int, forwarded_for_raw: Optional[str] = None
+    ) -> int:
+        """
+        Upsert the attacker row and insert a connections row. Returns the new connection id.
+
+        `ip_address` is the *resolved* client address (see
+        honeypot/core/client_ip.py). `forwarded_for_raw` stores the untouched
+        proxy header alongside it as evidence — parameterized like every other
+        attacker-controlled value, never interpolated.
+        """
         if self.backend == "postgres":
             async with self._pg_pool.acquire() as conn:
                 async with conn.transaction():
@@ -91,11 +135,11 @@ class AsyncDatabase:
                     )
                     row = await conn.fetchrow(
                         """
-                        INSERT INTO connections (ip_address, service, port)
-                        VALUES ($1, $2, $3)
+                        INSERT INTO connections (ip_address, service, port, forwarded_for_raw)
+                        VALUES ($1, $2, $3, $4)
                         RETURNING id
                         """,
-                        ip_address, service, port,
+                        ip_address, service, port, forwarded_for_raw,
                     )
                     return row["id"]
 
@@ -111,8 +155,8 @@ class AsyncDatabase:
                 (ip_address,),
             )
             cur = conn.execute(
-                "INSERT INTO connections (ip_address, service, port) VALUES (?, ?, ?)",
-                (ip_address, service, port),
+                "INSERT INTO connections (ip_address, service, port, forwarded_for_raw) VALUES (?, ?, ?, ?)",
+                (ip_address, service, port, forwarded_for_raw),
             )
             return cur.lastrowid
 

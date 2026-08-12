@@ -32,7 +32,11 @@ CREATE TABLE IF NOT EXISTS connections (
     connected_at    TEXT NOT NULL DEFAULT (datetime('now')),
     disconnected_at TEXT,
     bytes_sent      INTEGER DEFAULT 0,
-    bytes_received  INTEGER DEFAULT 0
+    bytes_received  INTEGER DEFAULT 0,
+    -- Raw proxy forwarding header, verbatim (see schema_postgres.sql).
+    -- SQLite has no ADD COLUMN IF NOT EXISTS, so pre-existing dev databases
+    -- are migrated by _migrate_sqlite() in database/db_async.py instead.
+    forwarded_for_raw TEXT
 );
 
 CREATE TABLE IF NOT EXISTS login_attempts (

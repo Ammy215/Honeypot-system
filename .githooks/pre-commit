@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+#
+# Block commits containing anything key-shaped.
+#
+# Enable once per clone (hooks are not transferred by git clone):
+#     git config core.hooksPath .githooks
+#
+# This is a local convenience guard, NOT the security boundary. It is trivially
+# bypassed with `git commit --no-verify`, and it does nothing for anyone who
+# clones the repo without running the command above. The actual backstop is
+# GitHub push protection, enforced server-side — see docs/SECRETS.md.
+#
+# Scans only ADDED lines in staged changes, so pre-existing content and
+# deletions don't trip it.
+
+set -uo pipefail
+
+# Files never scanned: this hook (it contains the patterns themselves), the
+# example env template (placeholders only), and the secrets documentation.
+EXCLUDE_RE='^(\.githooks/pre-commit|\.env\.example|docs/SECRETS\.md)$'
+
+# Markers that identify an obvious placeholder rather than a live credential.
+PLACEHOLDER_RE='REPLACE_ME|your_|YOUR_|<[a-zA-Z_-]+>|xxxx|XXXX|example\.com|placeholder|changeme|CHANGEME'
+
+# name|regex — one per line.
+PATTERNS=$(cat <<'EOF'
+Google/Gemini API key|AIza[0-9A-Za-z_-]{30,}
+OpenAI API key|sk-[A-Za-z0-9_-]{20,}
+AbuseIPDB API key (80 hex)|\b[a-f0-9]{80}\b
+OTX API key (64 hex)|\b[a-f0-9]{64}\b
+AWS access key id|\bAKIA[0-9A-Z]{16}\b
+Slack token|xox[abprs]-[0-9A-Za-z-]{10,}
+Private key block|-----BEGIN [A-Z ]*PRIVATE KEY-----
+DB URL with inline password|postgres(ql)?://[^:@/[:space:]]+:[^@/[:space:]]+@
+Fernet/base64 secret assignment|(API_KEY_ENCRYPTION_SECRET|MASTER_KEY)[[:space:]]*=[[:space:]]*['\"]?[A-Za-z0-9_=-]{32,}
+Generic secret assignment|(SECRET|TOKEN|PASSWORD|APIKEY|API_KEY)[A-Z_]*[[:space:]]*=[[:space:]]*['\"]?[A-Za-z0-9/+_-]{16,}
+EOF
+)
+
+staged_files=$(git diff --cached --name-only --diff-filter=ACM | grep -Ev "$EXCLUDE_RE" || true)
+[ -z "$staged_files" ] && exit 0
+
+findings=""
+
+while IFS= read -r file; do
+    [ -z "$file" ] && continue
+
+    # Added lines only ('+' prefix, excluding the '+++' file header).
+    added=$(git diff --cached -U0 -- "$file" | grep -E '^\+' | grep -Ev '^\+\+\+' || true)
+    [ -z "$added" ] && continue
+
+    # Drop lines that are clearly templates/placeholders.
+    added=$(printf '%s\n' "$added" | grep -Ev "$PLACEHOLDER_RE" || true)
+    [ -z "$added" ] && continue
+
+    while IFS='|' read -r label regex; do
+        [ -z "$label" ] && continue
+        # `--` is required: the private-key pattern begins with "-----" and
+        # would otherwise be parsed as grep options.
+        hits=$(printf '%s\n' "$added" | grep -E -- "$regex" || true)
+        if [ -n "$hits" ]; then
+            findings+=$'\n'"  $file — $label"
+            # Show a redacted excerpt: enough to locate it, not enough to leak
+            # the value into terminal scrollback or CI logs.
+            while IFS= read -r hit; do
+                excerpt=$(printf '%s' "$hit" | cut -c1-40)
+                findings+=$'\n'"      ${excerpt}…[redacted]"
+            done <<< "$hits"
+        fi
+    done <<< "$PATTERNS"
+done <<< "$staged_files"
+
+if [ -n "$findings" ]; then
+    cat >&2 <<BANNER
+
+  ┌────────────────────────────────────────────────────────────┐
+  │  COMMIT BLOCKED — possible secret in staged changes        │
+  └────────────────────────────────────────────────────────────┘
+$findings
+
+  If this is a real credential:
+    1. git restore --staged <file>   (unstage it)
+    2. Move the value into .env  (already gitignored)
+    3. ROTATE IT ANYWAY — it existed in your working tree, and
+       rotation is cheap compared to assuming it never leaked.
+
+  If this is a false positive, use a placeholder form
+  (your_key_here, REPLACE_ME, <value>) or add the file to
+  EXCLUDE_RE in .githooks/pre-commit.
+
+  --no-verify bypasses this hook. GitHub push protection will
+  not be bypassed, and is the check that actually matters.
+
+BANNER
+    exit 1
+fi
+
+exit 0

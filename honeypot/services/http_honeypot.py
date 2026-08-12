@@ -8,11 +8,12 @@ credentials are captured as inert text only, never interpreted.
 
 import asyncio
 import time
-from typing import Tuple, Optional
+from typing import Dict, Tuple, Optional
 from urllib.parse import unquote_plus
 
 import config
 from honeypot.core.async_base_service import AsyncHoneypotService
+from honeypot.core.client_ip import resolve_client_ip
 from database.db_async import db
 from honeypot.detectors.async_detection import check_and_alert, check_connection_patterns
 from honeypot.intelligence.async_enrichment import enrich_and_score
@@ -24,23 +25,37 @@ class HTTPHoneypot(AsyncHoneypotService):
     """Fake HTTP service honeypot — simulates admin panels"""
 
     def __init__(self, port: int = None, host: str = None):
-        super().__init__(port or config.SERVICES["HTTP"]["port"], "HTTP", host)
+        # config.HTTP_PORT is $PORT when the platform injects one (PaaS routes
+        # exactly one port and picks it), else the local-dev port from SERVICES.
+        super().__init__(port or config.HTTP_PORT, "HTTP", host)
 
     async def handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, address: Tuple[str, int]
     ):
-        ip_address = address[0]
+        peer_ip = address[0]
         start_time = time.monotonic()
 
-        self.logger.info(f"HTTP connection from {ip_address}:{address[1]}")
+        # Read the request before recording anything: behind a load balancer the
+        # real client IP arrives in a header, and every downstream consumer
+        # (enrichment, detection, scoring) must key off the resolved address
+        # rather than the balancer's. recv_safe has its own short timeout, so
+        # this still returns promptly for a client that never sends a byte —
+        # the idle-client case that broke logging in Phase 1 stays covered.
+        request_data = await self.recv_safe(reader, 8192)
+        headers = self._parse_headers(request_data) if request_data else {}
+        ip_address, forwarded_raw = resolve_client_ip(headers, peer_ip)
 
-        # Log the connection unconditionally before attempting to read the
-        # request, so an idle client that never sends a byte still shows up.
-        connection_id = await db.record_connection(ip_address=ip_address, service="http", port=self.port)
+        if forwarded_raw and ip_address != peer_ip:
+            self.logger.info(f"HTTP connection from {ip_address} (via proxy {peer_ip})")
+        else:
+            self.logger.info(f"HTTP connection from {ip_address}:{address[1]}")
+
+        connection_id = await db.record_connection(
+            ip_address=ip_address, service="http", port=self.port, forwarded_for_raw=forwarded_raw
+        )
         self.spawn_background(enrich_and_score(ip_address))
         await check_connection_patterns(ip_address)
 
-        request_data = await self.recv_safe(reader, 8192)
         if not request_data:
             self._log_closed(ip_address, start_time, "no request")
             return
@@ -54,12 +69,6 @@ class HTTPHoneypot(AsyncHoneypotService):
             return
 
         method, path = parts[0].upper(), parts[1]
-
-        headers = {}
-        for line in lines[1:]:
-            if ":" in line:
-                key, value = line.split(":", 1)
-                headers[key.strip().lower()] = value.strip()
         user_agent = headers.get("user-agent", "Unknown")
         self.logger.info(f"HTTP {method} {path} from {ip_address} | UA: {user_agent}")
 
@@ -117,6 +126,22 @@ class HTTPHoneypot(AsyncHoneypotService):
             "\r\n"
         ).encode("utf-8") + body
         await self.send_safe(writer, response)
+
+    @staticmethod
+    def _parse_headers(request_data: str) -> Dict[str, str]:
+        """
+        Header name -> value, names lower-cased. Duplicate names keep the last
+        occurrence, matching how proxies fold repeated headers. Parsing only —
+        no value here is trusted without going through resolve_client_ip.
+        """
+        headers: Dict[str, str] = {}
+        for line in request_data.split("\n")[1:]:
+            if not line.strip():
+                break  # end of the header block; body starts here
+            if ":" in line:
+                key, value = line.split(":", 1)
+                headers[key.strip().lower()] = value.strip()
+        return headers
 
     @staticmethod
     def _parse_post_credentials(request_data: str) -> Tuple[Optional[str], Optional[str]]:
