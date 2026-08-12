@@ -14,8 +14,13 @@ SERVICES = {
     "RDP":    {"port": 3389,  "enabled": False},  # Enable in phase 2
 }
 
-# ── Database ────────────────────────────────────────────
+# ── Database (v1, legacy dashboard/auth — unchanged) ─────
 DATABASE_PATH = "data/honeypot.db"
+
+# ── Database (v2 async core, HONEYSHIELD_PROJECT.md §5) ──
+# Postgres in prod when set; falls back to local SQLite for dev when empty.
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+SQLITE_PATH = os.getenv("SQLITE_PATH", "./data/honeyshield_dev.db")
 
 # ── Logging ─────────────────────────────────────────────
 LOG_DIR = "logs/"
@@ -43,6 +48,7 @@ DASHBOARD_PORT = 8501
 
 # ── Connection Limits ────────────────────────────────────
 MAX_CONNECTIONS_PER_IP = 100      # Block after this many
+MAX_TOTAL_CONNECTIONS = 500       # Global ceiling (async core, spec §6.5)
 CONNECTION_TIMEOUT_SECONDS = 30
 MAX_LOGIN_ATTEMPTS_PER_SESSION = 10
 

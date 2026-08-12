@@ -1,6 +1,9 @@
 # Core
 python-dotenv==1.2.2
 
+# Database (v2 async core — PostgreSQL prod driver; SQLite dev uses stdlib sqlite3)
+asyncpg==0.31.0
+
 # Dashboard
 streamlit==1.61.1
 plotly==6.9.0

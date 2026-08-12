@@ -1,76 +1,63 @@
-import socket
+"""
+Fake SSH honeypot — HoneyShield v2 (asyncio).
+
+Sends a realistic OpenSSH banner, reads whatever the client sends (SSH
+client identification / key exchange bytes), logs the connection, and
+closes. Captured bytes are stored as inert text only — never parsed as a
+real SSH handshake, never executed.
+"""
+
+import asyncio
 import time
 from typing import Tuple
+
 import config
-from honeypot.core.base_service import BaseHoneypotService
-from database.db import log_connection, update_service_stats
+from honeypot.core.async_base_service import AsyncHoneypotService
+from database.db_async import db
 
 
-class SSHHoneypot(BaseHoneypotService):
+class SSHHoneypot(AsyncHoneypotService):
     """Fake SSH service honeypot"""
-    
-    def __init__(self, port: int = 2222, host: str = "0.0.0.0"):
-        super().__init__(port, "SSH", host)
+
+    def __init__(self, port: int = None, host: str = None):
+        super().__init__(port or config.SERVICES["SSH"]["port"], "SSH", host)
         self.banner = config.BANNERS["SSH"]
-    
+
     def get_banner(self) -> bytes:
-        """Return SSH banner"""
-        return f"{self.banner}\r\n".encode('utf-8')
-    
-    def handle_connection(self, client_socket: socket.socket, address: Tuple[str, int]):
-        """Handle SSH connection attempt"""
+        return f"{self.banner}\r\n".encode("utf-8")
+
+    async def handle_connection(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, address: Tuple[str, int]
+    ):
         ip_address = address[0]
         source_port = address[1]
-        start_time = time.time()
-        
+        start_time = time.monotonic()
+
         self.logger.info(f"SSH connection from {ip_address}:{source_port}")
-        
-        # Send fake SSH banner immediately
-        banner_sent = self.send_safe(client_socket, self.get_banner())
-        
-        if not banner_sent:
+
+        if not await self.send_safe(writer, self.get_banner()):
             return
-        
-        # Collect any data sent by the client
+
+        # Collect whatever the client sends (SSH identification / KEXINIT bytes,
+        # or just a brute-force script's blind payload) — stored as inert text only.
         raw_data_parts = []
-        
-        try:
-            # Wait for client data (SSH client identification, key exchange, etc.)
-            for _ in range(3):  # Accept up to 3 packets
-                data = self.recv_safe(client_socket, 4096)
-                if data:
-                    raw_data_parts.append(data)
-                    self.logger.debug(f"Received from {ip_address}: {data[:100]}")
-                else:
-                    break
-                
-                # Small delay between reads
-                time.sleep(0.1)
-        
-        except Exception as e:
-            self.logger.error(f"Error reading SSH data from {ip_address}: {e}")
-        
-        # Combine all received data
+        for _ in range(3):  # accept up to 3 packets
+            data = await self.recv_safe(reader, 4096)
+            if not data:
+                break
+            raw_data_parts.append(data)
+            self.logger.debug(f"Received from {ip_address}: {data[:100]!r}")
+            await asyncio.sleep(0.1)
+
         raw_data = "".join(raw_data_parts) if raw_data_parts else None
-        
-        # Log connection to database
-        log_connection(
-            ip_address=ip_address,
-            source_port=source_port,
-            destination_port=self.port,
-            service_name=self.service_name,
-            raw_data=raw_data
+        if raw_data:
+            self.logger.debug(f"Raw data from {ip_address} (len={len(raw_data)}), stored inert")
+
+        connection_id = await db.record_connection(
+            ip_address=ip_address, service="ssh", port=self.port
         )
-        
-        # Update service statistics
-        update_service_stats(self.service_name, self.port)
-        
-        # Calculate connection duration
-        duration = time.time() - start_time
-        self.logger.info(f"SSH connection from {ip_address} closed after {duration:.2f}s")
-        
-        # Close connection
-        try:
-            client_socket.close()
-        except:
-            pass
+
+        duration = time.monotonic() - start_time
+        self.logger.info(
+            f"SSH connection from {ip_address} closed after {duration:.2f}s (connection id {connection_id})"
+        )
