@@ -445,5 +445,388 @@ class AsyncDatabase:
 
         return await self._run_sqlite(_work)
 
+    # ── Admin users (phase 4) ─────────────────────────────────────────
+
+    async def count_admin_users(self) -> int:
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT COUNT(*) AS cnt FROM admin_users")
+                return row["cnt"]
+
+        def _work(conn: sqlite3.Connection):
+            return conn.execute("SELECT COUNT(*) AS cnt FROM admin_users").fetchone()[0]
+
+        return await self._run_sqlite(_work)
+
+    async def create_admin_user(self, username: str, password_hash: str) -> int:
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "INSERT INTO admin_users (username, password_hash) VALUES ($1, $2) RETURNING id",
+                    username, password_hash,
+                )
+                return row["id"]
+
+        def _work(conn: sqlite3.Connection):
+            cur = conn.execute(
+                "INSERT INTO admin_users (username, password_hash) VALUES (?, ?)", (username, password_hash)
+            )
+            return cur.lastrowid
+
+        return await self._run_sqlite(_work)
+
+    async def get_admin_user(self, username: str) -> Optional[dict]:
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT * FROM admin_users WHERE username = $1", username)
+                return dict(row) if row else None
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM admin_users WHERE username = ?", (username,)).fetchone()
+            return dict(row) if row else None
+
+        return await self._run_sqlite(_work)
+
+    async def record_admin_login_success(self, username: str):
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE admin_users
+                    SET failed_attempts = 0, locked_until = NULL, last_login = now()
+                    WHERE username = $1
+                    """,
+                    username,
+                )
+            return
+
+        def _work(conn: sqlite3.Connection):
+            conn.execute(
+                """
+                UPDATE admin_users
+                SET failed_attempts = 0, locked_until = NULL, last_login = datetime('now')
+                WHERE username = ?
+                """,
+                (username,),
+            )
+
+        await self._run_sqlite(_work)
+
+    async def is_admin_locked_out(self, username: str) -> bool:
+        """True if locked_until is set and still in the future — checked DB-side to avoid
+        cross-backend datetime parsing (Postgres datetime vs SQLite ISO text)."""
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT (locked_until IS NOT NULL AND locked_until > now()) AS locked "
+                    "FROM admin_users WHERE username = $1",
+                    username,
+                )
+                return bool(row["locked"]) if row else False
+
+        def _work(conn: sqlite3.Connection):
+            row = conn.execute(
+                "SELECT (locked_until IS NOT NULL AND locked_until > datetime('now')) AS locked "
+                "FROM admin_users WHERE username = ?",
+                (username,),
+            ).fetchone()
+            return bool(row[0]) if row else False
+
+        return await self._run_sqlite(_work)
+
+    async def record_admin_login_failure(self, username: str, max_attempts: int, lockout_minutes: int):
+        """Increment failed_attempts; lock the account once max_attempts is reached."""
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE admin_users
+                    SET failed_attempts = failed_attempts + 1,
+                        locked_until = CASE
+                            WHEN failed_attempts + 1 >= $2
+                            THEN now() + make_interval(mins => $3::int)
+                            ELSE locked_until
+                        END
+                    WHERE username = $1
+                    """,
+                    username, max_attempts, lockout_minutes,
+                )
+            return
+
+        def _work(conn: sqlite3.Connection):
+            conn.execute(
+                """
+                UPDATE admin_users
+                SET failed_attempts = failed_attempts + 1,
+                    locked_until = CASE
+                        WHEN failed_attempts + 1 >= ?
+                        THEN datetime('now', '+' || ? || ' minutes')
+                        ELSE locked_until
+                    END
+                WHERE username = ?
+                """,
+                (max_attempts, lockout_minutes, username),
+            )
+
+        await self._run_sqlite(_work)
+
+    # ── Dashboard read queries (phase 4) ──────────────────────────────
+
+    async def list_recent_connections(self, limit: int = 100, service: Optional[str] = None) -> list:
+        base = """
+            SELECT c.id, c.ip_address, c.service, c.port, c.connected_at,
+                   a.country, a.threat_score, a.verdict
+            FROM connections c
+            LEFT JOIN attackers a ON a.ip_address = c.ip_address
+        """
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                if service:
+                    rows = await conn.fetch(
+                        base + " WHERE c.service = $1 ORDER BY c.connected_at DESC LIMIT $2", service, limit
+                    )
+                else:
+                    rows = await conn.fetch(base + " ORDER BY c.connected_at DESC LIMIT $1", limit)
+                return [dict(r) for r in rows]
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            if service:
+                cur = conn.execute(
+                    base + " WHERE c.service = ? ORDER BY c.connected_at DESC LIMIT ?", (service, limit)
+                )
+            else:
+                cur = conn.execute(base + " ORDER BY c.connected_at DESC LIMIT ?", (limit,))
+            return [dict(r) for r in cur.fetchall()]
+
+        return await self._run_sqlite(_work)
+
+    async def list_attackers(self, limit: int = 100, search_ip: Optional[str] = None) -> list:
+        base = "SELECT * FROM attackers"
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                if search_ip:
+                    rows = await conn.fetch(
+                        base + " WHERE host(ip_address) LIKE $1 ORDER BY threat_score DESC LIMIT $2",
+                        f"%{search_ip}%", limit,
+                    )
+                else:
+                    rows = await conn.fetch(base + " ORDER BY threat_score DESC LIMIT $1", limit)
+                return [dict(r) for r in rows]
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            if search_ip:
+                cur = conn.execute(
+                    base + " WHERE ip_address LIKE ? ORDER BY threat_score DESC LIMIT ?",
+                    (f"%{search_ip}%", limit),
+                )
+            else:
+                cur = conn.execute(base + " ORDER BY threat_score DESC LIMIT ?", (limit,))
+            return [dict(r) for r in cur.fetchall()]
+
+        return await self._run_sqlite(_work)
+
+    async def list_login_attempts_for_ip(self, ip_address: str, limit: int = 50) -> list:
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT la.username, la.password, la.attempted_at, c.service
+                    FROM login_attempts la
+                    JOIN connections c ON c.id = la.connection_id
+                    WHERE la.ip_address = $1
+                    ORDER BY la.attempted_at DESC LIMIT $2
+                    """,
+                    ip_address, limit,
+                )
+                return [dict(r) for r in rows]
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(
+                """
+                SELECT la.username, la.password, la.attempted_at, c.service
+                FROM login_attempts la
+                JOIN connections c ON c.id = la.connection_id
+                WHERE la.ip_address = ?
+                ORDER BY la.attempted_at DESC LIMIT ?
+                """,
+                (ip_address, limit),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+        return await self._run_sqlite(_work)
+
+    async def list_alerts(self, limit: int = 100, severity: Optional[str] = None,
+                           acknowledged: Optional[bool] = None) -> list:
+        """Alerts, optionally filtered by severity and/or acknowledged status."""
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                if severity is not None and acknowledged is not None:
+                    rows = await conn.fetch(
+                        "SELECT * FROM alerts WHERE severity = $1 AND acknowledged = $2 ORDER BY created_at DESC LIMIT $3",
+                        severity, acknowledged, limit,
+                    )
+                elif severity is not None:
+                    rows = await conn.fetch(
+                        "SELECT * FROM alerts WHERE severity = $1 ORDER BY created_at DESC LIMIT $2", severity, limit
+                    )
+                elif acknowledged is not None:
+                    rows = await conn.fetch(
+                        "SELECT * FROM alerts WHERE acknowledged = $1 ORDER BY created_at DESC LIMIT $2",
+                        acknowledged, limit,
+                    )
+                else:
+                    rows = await conn.fetch("SELECT * FROM alerts ORDER BY created_at DESC LIMIT $1", limit)
+                return [dict(r) for r in rows]
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            ack = None if acknowledged is None else int(acknowledged)
+            if severity is not None and ack is not None:
+                cur = conn.execute(
+                    "SELECT * FROM alerts WHERE severity = ? AND acknowledged = ? ORDER BY created_at DESC LIMIT ?",
+                    (severity, ack, limit),
+                )
+            elif severity is not None:
+                cur = conn.execute(
+                    "SELECT * FROM alerts WHERE severity = ? ORDER BY created_at DESC LIMIT ?", (severity, limit)
+                )
+            elif ack is not None:
+                cur = conn.execute(
+                    "SELECT * FROM alerts WHERE acknowledged = ? ORDER BY created_at DESC LIMIT ?", (ack, limit)
+                )
+            else:
+                cur = conn.execute("SELECT * FROM alerts ORDER BY created_at DESC LIMIT ?", (limit,))
+            return [dict(r) for r in cur.fetchall()]
+
+        return await self._run_sqlite(_work)
+
+    async def acknowledge_alert(self, alert_id: int):
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                await conn.execute("UPDATE alerts SET acknowledged = TRUE WHERE id = $1", alert_id)
+            return
+
+        def _work(conn: sqlite3.Connection):
+            conn.execute("UPDATE alerts SET acknowledged = 1 WHERE id = ?", (alert_id,))
+
+        await self._run_sqlite(_work)
+
+    async def service_breakdown(self) -> list:
+        query = "SELECT service, COUNT(*) AS cnt FROM connections GROUP BY service ORDER BY cnt DESC"
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                rows = await conn.fetch(query)
+                return [dict(r) for r in rows]
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            return [dict(r) for r in conn.execute(query).fetchall()]
+
+        return await self._run_sqlite(_work)
+
+    async def verdict_breakdown(self) -> list:
+        query = "SELECT verdict, COUNT(*) AS cnt FROM attackers WHERE verdict IS NOT NULL GROUP BY verdict"
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                rows = await conn.fetch(query)
+                return [dict(r) for r in rows]
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            return [dict(r) for r in conn.execute(query).fetchall()]
+
+        return await self._run_sqlite(_work)
+
+    async def connections_timeline(self, hours: int = 24) -> list:
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT date_trunc('hour', connected_at) AS bucket, COUNT(*) AS cnt
+                    FROM connections
+                    WHERE connected_at >= now() - make_interval(hours => $1::int)
+                    GROUP BY bucket ORDER BY bucket
+                    """,
+                    hours,
+                )
+                return [dict(r) for r in rows]
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(
+                """
+                SELECT strftime('%Y-%m-%d %H:00', connected_at) AS bucket, COUNT(*) AS cnt
+                FROM connections
+                WHERE connected_at >= datetime('now', '-' || ? || ' hours')
+                GROUP BY bucket ORDER BY bucket
+                """,
+                (hours,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+        return await self._run_sqlite(_work)
+
+    async def summary_counts(self) -> dict:
+        queries = {
+            "total_connections": "SELECT COUNT(*) AS cnt FROM connections",
+            "total_attackers": "SELECT COUNT(*) AS cnt FROM attackers",
+            "active_alerts": "SELECT COUNT(*) AS cnt FROM alerts WHERE acknowledged = {}".format(
+                "FALSE" if self.backend == "postgres" else "0"
+            ),
+            "critical_attackers": "SELECT COUNT(*) AS cnt FROM attackers WHERE verdict = 'CRITICAL'",
+        }
+        result = {}
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                for key, q in queries.items():
+                    row = await conn.fetchrow(q)
+                    result[key] = row["cnt"]
+            return result
+
+        def _work(conn: sqlite3.Connection):
+            out = {}
+            for key, q in queries.items():
+                out[key] = conn.execute(q).fetchone()[0]
+            return out
+
+        return await self._run_sqlite(_work)
+
+    async def search_login_attempts(self, pattern: str, limit: int = 100) -> list:
+        """Substring search across username/password — used by Threat Hunting."""
+        like = f"%{pattern}%"
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT la.ip_address, la.username, la.password, la.attempted_at, c.service
+                    FROM login_attempts la
+                    JOIN connections c ON c.id = la.connection_id
+                    WHERE la.username ILIKE $1 OR la.password ILIKE $1
+                    ORDER BY la.attempted_at DESC LIMIT $2
+                    """,
+                    like, limit,
+                )
+                return [dict(r) for r in rows]
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(
+                """
+                SELECT la.ip_address, la.username, la.password, la.attempted_at, c.service
+                FROM login_attempts la
+                JOIN connections c ON c.id = la.connection_id
+                WHERE la.username LIKE ? OR la.password LIKE ?
+                ORDER BY la.attempted_at DESC LIMIT ?
+                """,
+                (like, like, limit),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+        return await self._run_sqlite(_work)
+
 
 db = AsyncDatabase()

@@ -1,224 +1,89 @@
 """
-Login page for HoneyShield Dashboard
+Admin login for the HoneyShield v2 dashboard.
+
+Single admin account, argon2-hashed, lockout after repeated failures
+(auth/async_admin_auth.py). Session state is Streamlit's own per-browser-
+session store — nothing is written to disk or exposed to the client.
 """
 
-import streamlit as st
+import asyncio
 import sys
 from pathlib import Path
 
-# Add parent directory to path
+import streamlit as st
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from auth.auth_manager import auth_manager
-from security.audit_logger import audit_logger
-import config
+from auth.async_admin_auth import authenticate, bootstrap_admin_if_needed, DEFAULT_ADMIN_USERNAME
+from database.db_async import db
+
+
+def _run(coro):
+    """Bridge async db/auth calls into Streamlit's sync script model."""
+    return asyncio.run(coro)
+
+
+def _ensure_bootstrapped():
+    if st.session_state.get("_bootstrap_checked"):
+        return
+    st.session_state["_bootstrap_checked"] = True
+
+    _run(db.connect())
+    _run(db.init_schema())
+    generated_password = _run(bootstrap_admin_if_needed())
+    if generated_password:
+        banner = "=" * 60
+        print(banner)
+        print("First-run setup: created default dashboard admin account")
+        print(f"  Username: {DEFAULT_ADMIN_USERNAME}")
+        print(f"  Password: {generated_password}")
+        print("This password is shown ONCE and is not stored anywhere in")
+        print("plaintext. Save it now.")
+        print(banner)
 
 
 def show_login_page():
-    """Display login page"""
-    st.set_page_config(
-        page_title="HoneyShield Login",
-        page_icon="🔐",
-        layout="centered"
-    )
-    
-    # Custom CSS for login page
-    st.markdown("""
-    <style>
-        .login-header {
-            font-size: 3rem;
-            font-weight: bold;
-            text-align: center;
-            padding: 2rem;
-            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        .login-container {
-            background-color: #ffffff;
-            padding: 2rem;
-            border-radius: 1rem;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-        .stTextInput > div > div > input {
-            border-radius: 0.5rem;
-        }
-        .stButton > button {
-            width: 100%;
-            border-radius: 0.5rem;
-            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            font-weight: bold;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    # Header
-    st.markdown('<h1 class="login-header">🔐 HoneyShield Login</h1>', unsafe_allow_html=True)
-    
-    # Login form
-    st.markdown("### Please Login")
-    
-    with st.form("login_form"):
-        username = st.text_input("Username", placeholder="Enter your username")
-        password = st.text_input("Password", type="password", placeholder="Enter your password")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            submit = st.form_submit_button("🔓 Login", use_container_width=True)
-        with col2:
-            if st.form_submit_button("❓ Help", use_container_width=True):
-                st.info("""
-                **Need Help?**
+    _ensure_bootstrapped()
 
-                - A default admin account is created on first run — its
-                  one-time password is printed to the server console, not
-                  stored anywhere on disk
-                - Too many failed attempts will temporarily lock the account
-                - Contact your administrator if you forgot your password
-                """)
-    
+    st.set_page_config(page_title="HoneyShield Login", page_icon="🔐", layout="centered")
+    st.title("🔐 HoneyShield Login")
+    st.caption("Single admin account. Default credentials are printed once to the server console on first run.")
+
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Log In", width='stretch')
+
     if submit:
         if not username or not password:
-            st.error("❌ Please enter both username and password")
+            st.error("Enter both username and password.")
             return
-        
-        # Get client IP (Streamlit doesn't expose this easily, use placeholder)
-        ip_address = "dashboard_user"
-        
-        # Attempt authentication
-        token = auth_manager.authenticate(username, password, ip_address)
-        
-        if token:
-            # Success!
-            st.session_state.auth_token = token
-            st.session_state.username = username
-            st.session_state.authenticated = True
-            
-            # Get user info
-            user = auth_manager.validate_session(token)
-            if user:
-                st.session_state.user_role = user.role
-            
-            # Log successful login
-            audit_logger.log_login_success(username, ip_address)
-            
-            st.success(f"✅ Welcome back, {username}!")
-            st.balloons()
-            
-            # Rerun to show dashboard
+
+        success = _run(authenticate(username, password))
+
+        if success:
+            st.session_state["authenticated"] = True
+            st.session_state["username"] = username
             st.rerun()
         else:
-            # Failed login
-            audit_logger.log_login_failure(username, ip_address, "Invalid credentials")
-            st.error("❌ Invalid username or password")
-    
-    # Footer
-    st.markdown("---")
-    st.caption("🍯 HoneyShield Intelligence Platform | Secure Access Portal")
+            # Deliberately generic — never echoes the submitted password, never
+            # distinguishes "wrong password" from "locked out" from "unknown user".
+            st.error("Invalid username or password.")
 
 
-def check_authentication():
-    """
-    Check if user is authenticated
-    
-    Returns:
-        bool: True if authenticated, False otherwise
-    """
-    # Check if authentication is disabled in config
-    if not config.ENABLE_AUTHENTICATION:
-        st.session_state.authenticated = True
-        st.session_state.username = "admin"
-        st.session_state.user_role = "admin"
-        st.session_state.auth_token = "bypass"
-        return True
-    
-    # Check if session variables exist
-    if 'authenticated' not in st.session_state:
-        st.session_state.authenticated = False
-    
-    if 'auth_token' not in st.session_state:
-        st.session_state.auth_token = None
-    
-    # If not authenticated, return False
-    if not st.session_state.authenticated or not st.session_state.auth_token:
-        return False
-    
-    # Validate token
-    user = auth_manager.validate_session(st.session_state.auth_token)
-    
-    if not user:
-        # Token expired or invalid
-        st.session_state.authenticated = False
-        st.session_state.auth_token = None
-        return False
-    
-    # Update user info
-    st.session_state.username = user.username
-    st.session_state.user_role = user.role
-    
-    return True
+def check_authentication() -> bool:
+    return bool(st.session_state.get("authenticated"))
 
 
 def logout():
-    """Logout current user"""
-    if 'auth_token' in st.session_state and st.session_state.auth_token:
-        # Log logout
-        audit_logger.log_logout(st.session_state.username)
-        
-        # Destroy session
-        auth_manager.logout(st.session_state.auth_token)
-    
-    # Clear session state
-    st.session_state.authenticated = False
-    st.session_state.auth_token = None
-    st.session_state.username = None
-    st.session_state.user_role = None
-    
+    st.session_state["authenticated"] = False
+    st.session_state["username"] = None
     st.rerun()
 
 
-def require_permission(permission: str):
-    """
-    Check if current user has permission
-    
-    Args:
-        permission: Permission to check
-    
-    Returns:
-        bool: True if user has permission
-    """
-    if not config.ENABLE_AUTHENTICATION:
-        return True
-    
-    if 'auth_token' not in st.session_state:
-        return False
-    
-    return auth_manager.has_permission(st.session_state.auth_token, permission)
-
-
 def show_user_info():
-    """Display current user info in sidebar"""
-    if not config.ENABLE_AUTHENTICATION:
-        st.sidebar.info("🔓 Authentication Disabled")
-        return
-    
-    if 'username' in st.session_state and st.session_state.username:
+    if st.session_state.get("username"):
         st.sidebar.markdown("---")
-        st.sidebar.markdown(f"**👤 User:** {st.session_state.username}")
-        st.sidebar.markdown(f"**🎭 Role:** {st.session_state.user_role}")
-        
-        if st.sidebar.button("🚪 Logout", use_container_width=True):
-            logout()
-
-
-# Main execution for standalone testing
-if __name__ == "__main__":
-    if not check_authentication():
-        show_login_page()
-    else:
-        st.success(f"✅ Authenticated as: {st.session_state.username}")
-        st.info(f"Role: {st.session_state.user_role}")
-        
-        if st.button("Logout"):
+        st.sidebar.markdown(f"**Logged in as:** {st.session_state['username']}")
+        if st.sidebar.button("Log Out", width='stretch'):
             logout()
