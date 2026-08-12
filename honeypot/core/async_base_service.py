@@ -2,15 +2,14 @@
 Asyncio base class for HoneyShield v2 honeypot services.
 
 Replaces the thread-per-connection model (honeypot/core/base_service.py) with
-asyncio.start_server, per HONEYSHIELD_PROJECT.md sections 3 and 9. The v1
-FTP/HTTP/Telnet services still use the threaded base until they're converted
-to asyncio in Phase 2 — this class is only used by the new SSH service so far.
+asyncio.start_server, per HONEYSHIELD_PROJECT.md sections 3 and 9. Used by
+all four v2 services (SSH, FTP, Telnet, HTTP) as of phase 2.
 """
 
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Tuple
+from typing import Dict, Set, Tuple
 
 import config
 
@@ -26,6 +25,7 @@ class AsyncHoneypotService(ABC):
         self._server: asyncio.base_events.Server = None
         self._active_by_ip: Dict[str, int] = {}
         self._active_total = 0
+        self._background_tasks: Set[asyncio.Task] = set()
 
     async def start(self):
         """Start listening. Blocks (serve_forever) until stop() is called."""
@@ -88,6 +88,18 @@ class AsyncHoneypotService(ABC):
         else:
             self._active_by_ip[ip] = count - 1
         self._active_total = max(0, self._active_total - 1)
+
+    def spawn_background(self, coro):
+        """
+        Schedule a coroutine (e.g. threat-intel enrichment) without awaiting
+        it, so it can never block or fail the connection handler that
+        triggered it. A reference is kept until completion (asyncio
+        recommends this — an untracked task can be garbage-collected mid-run).
+        """
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
 
     @staticmethod
     async def send_safe(writer: asyncio.StreamWriter, data: bytes) -> bool:

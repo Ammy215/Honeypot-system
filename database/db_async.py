@@ -273,5 +273,177 @@ class AsyncDatabase:
 
         return await self._run_sqlite(_work)
 
+    # ── Enrichment (phase 3) ──────────────────────────────────────────
+
+    _ENRICHMENT_TIMESTAMP_COLUMNS = {"geo_checked_at", "abuseipdb_checked_at", "otx_checked_at"}
+
+    async def get_attacker(self, ip_address: str) -> Optional[dict]:
+        """Fetch the full attackers row as a plain dict, or None if not seen yet."""
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT * FROM attackers WHERE ip_address = $1", ip_address)
+                return dict(row) if row else None
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute("SELECT * FROM attackers WHERE ip_address = ?", (ip_address,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+        return await self._run_sqlite(_work)
+
+    async def is_stale(self, ip_address: str, checked_at_column: str, ttl_seconds: int) -> bool:
+        """True if the given enrichment timestamp is NULL or older than ttl_seconds."""
+        if checked_at_column not in self._ENRICHMENT_TIMESTAMP_COLUMNS:
+            raise ValueError(f"Unknown enrichment timestamp column: {checked_at_column}")
+
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    f"""
+                    SELECT ({checked_at_column} IS NULL
+                            OR {checked_at_column} < now() - make_interval(secs => $2::int)) AS stale
+                    FROM attackers WHERE ip_address = $1
+                    """,
+                    ip_address, ttl_seconds,
+                )
+                return row["stale"] if row else True
+
+        def _work(conn: sqlite3.Connection):
+            cur = conn.execute(
+                f"""
+                SELECT ({checked_at_column} IS NULL
+                        OR {checked_at_column} < datetime('now', '-' || ? || ' seconds')) AS stale
+                FROM attackers WHERE ip_address = ?
+                """,
+                (ttl_seconds, ip_address),
+            )
+            row = cur.fetchone()
+            return bool(row[0]) if row else True
+
+        return await self._run_sqlite(_work)
+
+    async def update_geolocation(self, ip_address: str, country: Optional[str], city: Optional[str],
+                                  isp: Optional[str], asn: Optional[str]):
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE attackers
+                    SET country = $2, city = $3, isp = $4, asn = $5, geo_checked_at = now()
+                    WHERE ip_address = $1
+                    """,
+                    ip_address, country, city, isp, asn,
+                )
+            return
+
+        def _work(conn: sqlite3.Connection):
+            conn.execute(
+                """
+                UPDATE attackers
+                SET country = ?, city = ?, isp = ?, asn = ?, geo_checked_at = datetime('now')
+                WHERE ip_address = ?
+                """,
+                (country, city, isp, asn, ip_address),
+            )
+
+        await self._run_sqlite(_work)
+
+    async def update_abuseipdb(self, ip_address: str, score: Optional[int]):
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE attackers SET abuseipdb_score = $2, abuseipdb_checked_at = now() WHERE ip_address = $1",
+                    ip_address, score,
+                )
+            return
+
+        def _work(conn: sqlite3.Connection):
+            conn.execute(
+                "UPDATE attackers SET abuseipdb_score = ?, abuseipdb_checked_at = datetime('now') WHERE ip_address = ?",
+                (score, ip_address),
+            )
+
+        await self._run_sqlite(_work)
+
+    async def update_otx(self, ip_address: str, pulse_count: int):
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE attackers SET otx_pulse_count = $2, otx_checked_at = now() WHERE ip_address = $1",
+                    ip_address, pulse_count,
+                )
+            return
+
+        def _work(conn: sqlite3.Connection):
+            conn.execute(
+                "UPDATE attackers SET otx_pulse_count = ?, otx_checked_at = datetime('now') WHERE ip_address = ?",
+                (pulse_count, ip_address),
+            )
+
+        await self._run_sqlite(_work)
+
+    async def update_threat_score(self, ip_address: str, score: int, verdict: str):
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE attackers SET threat_score = $2, verdict = $3 WHERE ip_address = $1",
+                    ip_address, score, verdict,
+                )
+            return
+
+        def _work(conn: sqlite3.Connection):
+            conn.execute(
+                "UPDATE attackers SET threat_score = ?, verdict = ? WHERE ip_address = ?",
+                (score, verdict, ip_address),
+            )
+
+        await self._run_sqlite(_work)
+
+    async def count_login_attempts_total(self, ip_address: str) -> int:
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT COUNT(*) AS cnt FROM login_attempts WHERE ip_address = $1", ip_address
+                )
+                return row["cnt"]
+
+        def _work(conn: sqlite3.Connection):
+            cur = conn.execute("SELECT COUNT(*) AS cnt FROM login_attempts WHERE ip_address = ?", (ip_address,))
+            return cur.fetchone()[0]
+
+        return await self._run_sqlite(_work)
+
+    async def count_distinct_usernames_total(self, ip_address: str) -> int:
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT COUNT(DISTINCT username) AS cnt FROM login_attempts WHERE ip_address = $1", ip_address
+                )
+                return row["cnt"]
+
+        def _work(conn: sqlite3.Connection):
+            cur = conn.execute(
+                "SELECT COUNT(DISTINCT username) AS cnt FROM login_attempts WHERE ip_address = ?", (ip_address,)
+            )
+            return cur.fetchone()[0]
+
+        return await self._run_sqlite(_work)
+
+    async def list_attacker_ips(self, limit: int = 50) -> list:
+        """Most recently seen attacker IPs, for batch enrichment."""
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT ip_address FROM attackers ORDER BY last_seen DESC LIMIT $1", limit
+                )
+                return [str(r["ip_address"]) for r in rows]
+
+        def _work(conn: sqlite3.Connection):
+            cur = conn.execute("SELECT ip_address FROM attackers ORDER BY last_seen DESC LIMIT ?", (limit,))
+            return [r[0] for r in cur.fetchall()]
+
+        return await self._run_sqlite(_work)
+
 
 db = AsyncDatabase()

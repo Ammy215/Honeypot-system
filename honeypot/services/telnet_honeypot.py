@@ -14,6 +14,7 @@ import config
 from honeypot.core.async_base_service import AsyncHoneypotService
 from database.db_async import db
 from honeypot.detectors.async_detection import check_and_alert
+from honeypot.intelligence.async_enrichment import enrich_and_score
 
 MAX_ATTEMPTS_PER_SESSION = 2
 
@@ -39,6 +40,7 @@ class TelnetHoneypot(AsyncHoneypotService):
         # Log the connection unconditionally, before the login exchange, so an
         # idle client that never sends a byte still shows up.
         connection_id = await db.record_connection(ip_address=ip_address, service="telnet", port=self.port)
+        self.spawn_background(enrich_and_score(ip_address))
 
         if not await self.send_safe(writer, self.get_banner()):
             return

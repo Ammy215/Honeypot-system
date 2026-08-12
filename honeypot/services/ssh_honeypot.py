@@ -14,6 +14,7 @@ from typing import Tuple
 import config
 from honeypot.core.async_base_service import AsyncHoneypotService
 from database.db_async import db
+from honeypot.intelligence.async_enrichment import enrich_and_score
 
 
 class SSHHoneypot(AsyncHoneypotService):
@@ -56,6 +57,7 @@ class SSHHoneypot(AsyncHoneypotService):
         connection_id = await db.record_connection(
             ip_address=ip_address, service="ssh", port=self.port
         )
+        self.spawn_background(enrich_and_score(ip_address))
 
         duration = time.monotonic() - start_time
         self.logger.info(

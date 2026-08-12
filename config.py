@@ -29,12 +29,20 @@ LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 
 # ── Threat Intelligence APIs ─────────────────────────────
 ABUSEIPDB_API_KEY = os.getenv("ABUSEIPDB_API_KEY")
+OTX_API_KEY = os.getenv("OTX_API_KEY")  # re-introduced in v2 phase 3 — actually used this time
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 # ── Geolocation ──────────────────────────────────────────
 GEOIP_API_URL = "http://ip-api.com/json"   # Free, no key needed
 GEOIP_RATE_LIMIT = 45                       # Requests per minute
+
+# ── Enrichment cache TTLs (v2 phase 3) ────────────────────
+# Bounds re-checks to what each API's rate limit can sustain; values match
+# the caching strategy already used elsewhere (Project 4 in CLAUDE_CONTEXT.md).
+GEO_CACHE_TTL_SECONDS = 24 * 60 * 60        # 24h — geolocation rarely changes
+ABUSEIPDB_CACHE_TTL_SECONDS = 60 * 60       # 1h  — free tier easily sustains hourly re-checks
+OTX_CACHE_TTL_SECONDS = 6 * 60 * 60         # 6h  — pulse data updates slowly
 
 # ── Detection Thresholds ──────────────────────────────────
 BRUTE_FORCE_THRESHOLD = 10         # Login attempts per 5 minutes

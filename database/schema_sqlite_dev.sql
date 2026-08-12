@@ -16,7 +16,12 @@ CREATE TABLE IF NOT EXISTS attackers (
     otx_pulse_count   INTEGER DEFAULT 0,
     threat_score      INTEGER DEFAULT 0,
     verdict           TEXT,
-    total_connections INTEGER DEFAULT 0
+    total_connections INTEGER DEFAULT 0,
+    -- Enrichment cache timestamps (phase 3) — NULL means never checked.
+    -- Each enrichment source has its own TTL, checked independently.
+    geo_checked_at       TEXT,
+    abuseipdb_checked_at TEXT,
+    otx_checked_at       TEXT
 );
 
 CREATE TABLE IF NOT EXISTS connections (
