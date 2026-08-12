@@ -1,13 +1,12 @@
 """
 Weighted threat scoring engine — HoneyShield v2 (asyncio).
 
-Scoped to the signals actually available through phase 3: connection/login
-volume (phases 1-2), credential-stuffing breadth (phase 2), and the three
-enrichment sources built in phase 3 (AbuseIPDB score, OTX pulse count,
-datacenter/hosting ISP from geolocation). Behavioral factors that need the
-correlation engine (rapid-fire, multi-service, IOC list matching, Tor exit
-detection) are out of scope until later phases — see honeypot/detectors/
-async_detection.py and HONEYSHIELD_PROJECT.md section 10.
+Scoped to signals available through phase 5: connection/login volume
+(phases 1-2), credential-stuffing breadth (phase 2), the three enrichment
+sources from phase 3 (AbuseIPDB score, OTX pulse count, datacenter/hosting
+ISP from geolocation), and multi-service targeting from phase 5's
+correlation engine. rapid_fire, IOC list matching, and Tor exit detection
+are still out of scope — not backed by any detector yet.
 
 Weights and verdict bands are carried over from the v1 scorer
 (honeypot/intelligence/threat_scorer.py), which already tuned them.
@@ -34,6 +33,7 @@ THREAT_WEIGHTS = {
     "abuseipdb_score_over_25": 10,
     "otx_pulse_match": 15,
     "datacenter_hosting_ip": 5,
+    "multi_service_targeting": 15,
 }
 
 VERDICT_THRESHOLDS = [
@@ -115,6 +115,10 @@ async def calculate_threat_score(ip_address: str) -> Dict:
 
     if _is_datacenter_isp(attacker.get("isp")):
         add("datacenter", "datacenter_hosting_ip")
+
+    services_targeted = await db.count_distinct_services_total(ip_address)
+    if services_targeted >= 2:
+        add("multi_service", "multi_service_targeting")
 
     score = min(score, 100)
     verdict = _get_verdict(score)

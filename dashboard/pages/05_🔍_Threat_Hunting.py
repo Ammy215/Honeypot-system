@@ -1,15 +1,19 @@
 """
-Threat Hunting — search captured usernames/passwords and attacker IPs.
+Threat Hunting — credential/IP search, multi-service attackers, campaign preview.
 
 SECURITY: search results render attacker-supplied username/password
 values pulled straight from login_attempts. Rendered exclusively via
 st.dataframe, which treats cell contents as plain text — never markdown,
 never unsafe_allow_html — per HONEYSHIELD_PROJECT.md section 6 point 3.
 
-IOC list matching and campaign/correlation detection are not built yet
-(later phases — ioc_matches stays empty here on purpose, and campaign
-detection is phase 5's correlation engine). This page only searches data
-phases 1-3 actually capture.
+Phase 5 wires this page to the new correlation engine
+(honeypot/detectors/async_detection.py's multi-service check and
+honeypot/detectors/async_correlation.py's ASN campaign grouping) — the
+full campaign drill-down lives on the dedicated Campaigns page.
+
+IOC list matching still isn't built (no detector backs it) — this page's
+"pattern search" is the credential/IP substring search below, not IOC
+list membership.
 """
 
 import asyncio
@@ -23,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dashboard.login import check_authentication, show_login_page, show_user_info
 from database.db_async import db
+from honeypot.detectors.async_correlation import detect_asn_campaigns
 
 st.set_page_config(page_title="Threat Hunting", page_icon="🔍", layout="wide")
 
@@ -33,7 +38,7 @@ if not check_authentication():
 show_user_info()
 
 st.title("🔍 Threat Hunting")
-st.caption("IOC list matching and campaign correlation land in a later phase — this searches captured credentials and IPs only.")
+st.caption("No IOC list is built yet — this searches captured credentials/IPs and surfaces correlation-engine results.")
 
 st.subheader("Search Captured Credentials")
 pattern = st.text_input("Username or password contains...", placeholder="e.g. admin")
@@ -57,3 +62,27 @@ if ip_pattern:
         st.dataframe(pd.DataFrame(attackers), width='stretch')
     else:
         st.info("No matching attackers.")
+
+st.markdown("---")
+st.subheader("Multi-Service Attackers (Correlation Engine)")
+st.caption("IPs that hit 2+ honeypot services within a short window — classic recon/scanning behavior.")
+
+all_alerts = asyncio.run(db.list_alerts(limit=500))
+multi_service_alerts = [a for a in all_alerts if a["alert_type"] == "multi_service"]
+if multi_service_alerts:
+    rows = []
+    for a in multi_service_alerts:
+        rows.append({"ip_address": a["ip_address"], "created_at": a["created_at"], "evidence": a["evidence"]})
+    st.dataframe(pd.DataFrame(rows), width='stretch')
+else:
+    st.info("No multi-service attacks detected yet.")
+
+st.markdown("---")
+st.subheader("ASN Campaigns (preview)")
+campaigns = asyncio.run(detect_asn_campaigns())
+if campaigns:
+    st.dataframe(pd.DataFrame(campaigns)[["asn", "attacker_count", "campaign_start", "campaign_end", "severity"]],
+                 width='stretch')
+    st.caption("Full member breakdown is on the Campaigns page.")
+else:
+    st.info("No ASN campaigns detected yet (needs 3+ IPs from the same ASN active within the campaign window).")

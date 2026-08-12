@@ -828,5 +828,139 @@ class AsyncDatabase:
 
         return await self._run_sqlite(_work)
 
+    # ── Correlation engine (phase 5) ──────────────────────────────────
+
+    async def get_service_sequence_since(self, ip_address: str, window_seconds: int) -> list:
+        """Chronological (service, connected_at) pairs for one IP within the window —
+        used as multi-service alert evidence (which services, what order, what timestamps)."""
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT service, connected_at FROM connections
+                    WHERE ip_address = $1 AND connected_at >= now() - make_interval(secs => $2::int)
+                    ORDER BY connected_at ASC
+                    """,
+                    ip_address, window_seconds,
+                )
+                return [dict(r) for r in rows]
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(
+                """
+                SELECT service, connected_at FROM connections
+                WHERE ip_address = ? AND connected_at >= datetime('now', '-' || ? || ' seconds')
+                ORDER BY connected_at ASC
+                """,
+                (ip_address, window_seconds),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+        return await self._run_sqlite(_work)
+
+    async def count_distinct_services_since(self, ip_address: str, window_seconds: int) -> int:
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT COUNT(DISTINCT service) AS cnt FROM connections
+                    WHERE ip_address = $1 AND connected_at >= now() - make_interval(secs => $2::int)
+                    """,
+                    ip_address, window_seconds,
+                )
+                return row["cnt"]
+
+        def _work(conn: sqlite3.Connection):
+            cur = conn.execute(
+                """
+                SELECT COUNT(DISTINCT service) AS cnt FROM connections
+                WHERE ip_address = ? AND connected_at >= datetime('now', '-' || ? || ' seconds')
+                """,
+                (ip_address, window_seconds),
+            )
+            return cur.fetchone()[0]
+
+        return await self._run_sqlite(_work)
+
+    async def count_distinct_services_total(self, ip_address: str) -> int:
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT COUNT(DISTINCT service) AS cnt FROM connections WHERE ip_address = $1", ip_address
+                )
+                return row["cnt"]
+
+        def _work(conn: sqlite3.Connection):
+            cur = conn.execute("SELECT COUNT(DISTINCT service) AS cnt FROM connections WHERE ip_address = ?", (ip_address,))
+            return cur.fetchone()[0]
+
+        return await self._run_sqlite(_work)
+
+    async def detect_asn_campaigns(self, window_seconds: int, min_attackers: int) -> list:
+        """Group attackers by ASN where >= min_attackers distinct IPs were active
+        within the last window_seconds — same shape as v1's campaign_detector.py."""
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT asn,
+                           COUNT(DISTINCT ip_address) AS attacker_count,
+                           string_agg(DISTINCT host(ip_address), ',') AS ip_list,
+                           MIN(first_seen) AS campaign_start,
+                           MAX(last_seen) AS campaign_end,
+                           SUM(total_connections) AS total_connections
+                    FROM attackers
+                    WHERE asn IS NOT NULL AND last_seen >= now() - make_interval(secs => $1::int)
+                    GROUP BY asn
+                    HAVING COUNT(DISTINCT ip_address) >= $2
+                    ORDER BY attacker_count DESC
+                    """,
+                    window_seconds, min_attackers,
+                )
+                return [dict(r) for r in rows]
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(
+                """
+                SELECT asn,
+                       COUNT(DISTINCT ip_address) AS attacker_count,
+                       GROUP_CONCAT(DISTINCT ip_address) AS ip_list,
+                       MIN(first_seen) AS campaign_start,
+                       MAX(last_seen) AS campaign_end,
+                       SUM(total_connections) AS total_connections
+                FROM attackers
+                WHERE asn IS NOT NULL AND last_seen >= datetime('now', '-' || ? || ' seconds')
+                GROUP BY asn
+                HAVING attacker_count >= ?
+                ORDER BY attacker_count DESC
+                """,
+                (window_seconds, min_attackers),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+        return await self._run_sqlite(_work)
+
+    async def get_attackers_by_ips(self, ip_addresses: list) -> list:
+        """Full attacker rows for a specific set of IPs — used to expand a campaign's membership."""
+        if not ip_addresses:
+            return []
+
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT * FROM attackers WHERE host(ip_address) = ANY($1::text[])", ip_addresses
+                )
+                return [dict(r) for r in rows]
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            placeholders = ",".join("?" for _ in ip_addresses)
+            cur = conn.execute(f"SELECT * FROM attackers WHERE ip_address IN ({placeholders})", ip_addresses)
+            return [dict(r) for r in cur.fetchall()]
+
+        return await self._run_sqlite(_work)
+
 
 db = AsyncDatabase()

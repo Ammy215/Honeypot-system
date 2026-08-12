@@ -48,7 +48,12 @@ OTX_CACHE_TTL_SECONDS = 6 * 60 * 60         # 6h  — pulse data updates slowly
 BRUTE_FORCE_THRESHOLD = 10         # Login attempts per 5 minutes
 RAPID_FIRE_THRESHOLD = 3           # Attempts per second
 MULTI_SERVICE_THRESHOLD = 2        # Services before flagging
+MULTI_SERVICE_WINDOW_SECONDS = 300 # Window for "same IP hit 2+ services" (v2 phase 5)
 CREDENTIAL_STUFFING_THRESHOLD = 5  # Unique usernames per 10 minutes
+
+# ── Campaign Detection (v2 phase 5) ───────────────────────
+CAMPAIGN_MIN_ATTACKERS = 3            # Distinct IPs sharing an ASN before it's a "campaign"
+CAMPAIGN_WINDOW_SECONDS = 24 * 60 * 60  # 24h — matches v1's campaign_detector.py precedent
 
 # ── Dashboard ────────────────────────────────────────────
 DASHBOARD_REFRESH_SECONDS = 15

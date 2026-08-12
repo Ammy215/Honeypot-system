@@ -41,6 +41,7 @@ with st.sidebar:
         "- 📈 Analytics\n"
         "- 🚨 Alerts\n"
         "- 🔍 Threat Hunting\n"
+        "- 🎪 Campaigns\n"
         "- 🤖 AI Analysis\n"
     )
     st.markdown("---")

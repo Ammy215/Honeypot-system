@@ -14,7 +14,7 @@ from urllib.parse import unquote_plus
 import config
 from honeypot.core.async_base_service import AsyncHoneypotService
 from database.db_async import db
-from honeypot.detectors.async_detection import check_and_alert
+from honeypot.detectors.async_detection import check_and_alert, check_connection_patterns
 from honeypot.intelligence.async_enrichment import enrich_and_score
 
 SERVER_HEADER = "Apache/2.4.41 (Ubuntu)"
@@ -38,6 +38,7 @@ class HTTPHoneypot(AsyncHoneypotService):
         # request, so an idle client that never sends a byte still shows up.
         connection_id = await db.record_connection(ip_address=ip_address, service="http", port=self.port)
         self.spawn_background(enrich_and_score(ip_address))
+        await check_connection_patterns(ip_address)
 
         request_data = await self.recv_safe(reader, 8192)
         if not request_data:
