@@ -97,12 +97,23 @@ the database URL as **Secret**, not plain text.
 | `FORWARDED_IP_HEADER` | `x-forwarded-for` | Confirm against §6 before relying on it |
 | `IGNORE_UNFORWARDED_CONNECTIONS` | `true` | Drops health-check noise. **Set this only after §6 confirms real traffic carries the header** |
 | `PYTHONIOENCODING` | `utf-8` | Container logs are a pipe; the banner glyphs crash startup under a C/POSIX locale. Must be a real env var — `.env` is read too late |
-| `ABUSEIPDB_API_KEY` | production key | |
-| `OTX_API_KEY` | production key | |
-| `GEMINI_API_KEY` | production key | |
+| `ABUSEIPDB_API_KEY` | production key | Rotated, honeypot-only — see docs/SECRETS.md |
+| `GEMINI_API_KEY` | production key | Rotated, honeypot-only, live-verified |
 | `GEMINI_MODEL` | `gemini-flash-latest` | |
 
 `PORT` is injected by Koyeb automatically — do **not** set it.
+
+**`OTX_API_KEY` is deliberately left unset here.** Unlike AbuseIPDB and Gemini, AlienVault
+OTX issues exactly one API key per account — there's no way to generate a second,
+honeypot-only key. The existing key is already shared with other, unrelated projects,
+so putting it in Koyeb's env store would widen its blast radius beyond this deployment:
+a Koyeb compromise would then expose a credential that also protects those other
+projects, not just this one.
+
+The app already handles this cleanly — `honeypot/intelligence/async_otx.py` gates every
+call behind `_has_api_key()`, tested since Phase 3. With no key, OTX pulse-match
+enrichment (one of 14 scoring factors, weight 15/100) just doesn't populate; nothing
+crashes or degrades elsewhere. AbuseIPDB and Gemini enrichment are unaffected.
 
 ## 5. Deploy
 

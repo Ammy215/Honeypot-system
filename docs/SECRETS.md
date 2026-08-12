@@ -29,15 +29,16 @@ git grep -aIE "(AIza[0-9A-Za-z_-]{20,}|sk-[A-Za-z0-9]{20,}|[a-f0-9]{80})" $(git 
 ## 2. Separate production and development keys
 
 Generate a **second, independent key for each service** and use it only in
-production. Never share one key across both.
+production. Never share one key across both — except OTX, which structurally can't
+do this (see below).
 
-| Service | Dev | Production |
-|---|---|---|
-| AbuseIPDB | existing key | new key |
-| AlienVault OTX | existing key | new key |
-| Google Gemini | existing key | new key |
+| Service | Dev | Production | Status |
+|---|---|---|---|
+| AbuseIPDB | old key retired | new key | ✅ rotated 2026-08-13, verified |
+| Google Gemini | old key retired | new key | ✅ rotated 2026-08-13, live-verified (`finish_reason: STOP`) |
+| AlienVault OTX | one shared key | — | ⚠️ can't be separated — see below |
 
-Why it's worth the five minutes:
+Why it's worth doing for AbuseIPDB and Gemini:
 
 - **Containment.** The production key lives on a third-party PaaS you don't
   control. A leak there is revoked in isolation without breaking local work, and
@@ -46,9 +47,30 @@ Why it's worth the five minutes:
   identifies *which* environment leaked, rather than leaving you guessing.
 - **Rotation without downtime.** You can roll one side while the other keeps working.
 
-**Rotate the existing AbuseIPDB key regardless.** It sat unprotected on disk before
-this project's hardening pass. It has not appeared in git, but "not in git" is not
-the same as "never exposed" — rotation is cheap.
+**AbuseIPDB was rotated regardless of whether it had leaked**, on principle — it sat
+unprotected on disk before this project's hardening pass. It never appeared in git,
+but "not in git" isn't the same as "never exposed," and rotation is cheap.
+
+### OTX is a structural exception, not an oversight
+
+AlienVault OTX issues **exactly one API key per account** — there's no way to
+generate a second, project-scoped key the way AbuseIPDB and Gemini allow. The
+existing key is already shared with other, unrelated projects on this account.
+
+Given that, **the decision made here is to keep it dev-only and never deploy it to
+Koyeb.** Putting a cross-project credential into a third-party platform's env store
+would widen its blast radius past this deployment — a Koyeb compromise would then
+expose whatever else that key protects, not just this honeypot.
+
+The app degrades cleanly without it: `_has_api_key()` in
+`honeypot/intelligence/async_otx.py` gates every OTX call, tested since Phase 3. In
+production, OTX pulse-match enrichment (one of 14 scoring factors, weight 15/100)
+simply doesn't populate — nothing crashes, nothing else is affected. See
+`docs/KOYEB.md`'s environment variable table.
+
+If OTX enrichment in production ever becomes a priority, the only way to get a
+project-scoped key is a **separate AlienVault OTX account** dedicated to this
+project — not a setting change, an entirely new account.
 
 ## 3. Confirm no billing is attached
 
