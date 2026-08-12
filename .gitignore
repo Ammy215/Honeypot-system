@@ -41,3 +41,6 @@ dist/
 build/
 .pytest_cache/
 .venv/
+
+# Personal AI-session context — cross-project notes, not for this repo's history
+CLAUDE_CONTEXT.md

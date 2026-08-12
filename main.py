@@ -16,6 +16,9 @@ from rich.console import Console
 import config
 from database.db_async import db
 from honeypot.services.ssh_honeypot import SSHHoneypot
+from honeypot.services.ftp_honeypot import FTPHoneypot
+from honeypot.services.telnet_honeypot import TelnetHoneypot
+from honeypot.services.http_honeypot import HTTPHoneypot
 
 console = Console()
 
@@ -55,7 +58,7 @@ async def run():
     await db.init_schema()
     console.print(f"[green]✓[/green] Database ready ({db.backend})\n")
 
-    services = [SSHHoneypot()]
+    services = [SSHHoneypot(), FTPHoneypot(), TelnetHoneypot(), HTTPHoneypot()]
 
     console.print("[bold cyan]Starting services:[/bold cyan]")
     for service in services:

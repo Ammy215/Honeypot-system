@@ -8,9 +8,11 @@ either way, so honeypot services don't need to know which one is active.
 """
 
 import asyncio
+import json
 import sqlite3
 import logging
 from pathlib import Path
+from typing import Optional
 
 import config
 
@@ -111,6 +113,161 @@ class AsyncDatabase:
             cur = conn.execute(
                 "INSERT INTO connections (ip_address, service, port) VALUES (?, ?, ?)",
                 (ip_address, service, port),
+            )
+            return cur.lastrowid
+
+        return await self._run_sqlite(_work)
+
+    async def record_login_attempt(
+        self, connection_id: int, ip_address: str, username: Optional[str], password: Optional[str]
+    ) -> int:
+        """Insert a login_attempts row and bump the attacker's last_seen. Returns the new row id."""
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        "UPDATE attackers SET last_seen = now() WHERE ip_address = $1", ip_address
+                    )
+                    row = await conn.fetchrow(
+                        """
+                        INSERT INTO login_attempts (connection_id, ip_address, username, password)
+                        VALUES ($1, $2, $3, $4)
+                        RETURNING id
+                        """,
+                        connection_id, ip_address, username, password,
+                    )
+                    return row["id"]
+
+        def _work(conn: sqlite3.Connection):
+            conn.execute(
+                "UPDATE attackers SET last_seen = datetime('now') WHERE ip_address = ?",
+                (ip_address,),
+            )
+            cur = conn.execute(
+                """
+                INSERT INTO login_attempts (connection_id, ip_address, username, password)
+                VALUES (?, ?, ?, ?)
+                """,
+                (connection_id, ip_address, username, password),
+            )
+            return cur.lastrowid
+
+        return await self._run_sqlite(_work)
+
+    async def count_login_attempts_since(self, ip_address: str, service: str, window_seconds: int) -> int:
+        """Count login attempts for one IP on one service within the last window_seconds."""
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT COUNT(*) AS cnt
+                    FROM login_attempts la
+                    JOIN connections c ON c.id = la.connection_id
+                    WHERE c.ip_address = $1 AND c.service = $2
+                      AND la.attempted_at >= now() - make_interval(secs => $3::int)
+                    """,
+                    ip_address, service, window_seconds,
+                )
+                return row["cnt"]
+
+        def _work(conn: sqlite3.Connection):
+            cur = conn.execute(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM login_attempts la
+                JOIN connections c ON c.id = la.connection_id
+                WHERE c.ip_address = ? AND c.service = ?
+                  AND la.attempted_at >= datetime('now', '-' || ? || ' seconds')
+                """,
+                (ip_address, service, window_seconds),
+            )
+            return cur.fetchone()[0]
+
+        return await self._run_sqlite(_work)
+
+    async def count_distinct_usernames_since(self, ip_address: str, window_seconds: int) -> int:
+        """Count distinct usernames tried by one IP across any service within window_seconds."""
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT COUNT(DISTINCT la.username) AS cnt
+                    FROM login_attempts la
+                    JOIN connections c ON c.id = la.connection_id
+                    WHERE c.ip_address = $1
+                      AND la.attempted_at >= now() - make_interval(secs => $2::int)
+                    """,
+                    ip_address, window_seconds,
+                )
+                return row["cnt"]
+
+        def _work(conn: sqlite3.Connection):
+            cur = conn.execute(
+                """
+                SELECT COUNT(DISTINCT la.username) AS cnt
+                FROM login_attempts la
+                JOIN connections c ON c.id = la.connection_id
+                WHERE c.ip_address = ?
+                  AND la.attempted_at >= datetime('now', '-' || ? || ' seconds')
+                """,
+                (ip_address, window_seconds),
+            )
+            return cur.fetchone()[0]
+
+        return await self._run_sqlite(_work)
+
+    async def recent_alert_exists(self, ip_address: str, alert_type: str, window_seconds: int) -> bool:
+        """De-dup guard: has this IP already triggered this alert type recently?"""
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT 1 FROM alerts
+                    WHERE ip_address = $1 AND alert_type = $2
+                      AND created_at >= now() - make_interval(secs => $3::int)
+                    LIMIT 1
+                    """,
+                    ip_address, alert_type, window_seconds,
+                )
+                return row is not None
+
+        def _work(conn: sqlite3.Connection):
+            cur = conn.execute(
+                """
+                SELECT 1 FROM alerts
+                WHERE ip_address = ? AND alert_type = ?
+                  AND created_at >= datetime('now', '-' || ? || ' seconds')
+                LIMIT 1
+                """,
+                (ip_address, alert_type, window_seconds),
+            )
+            return cur.fetchone() is not None
+
+        return await self._run_sqlite(_work)
+
+    async def record_alert(self, ip_address: str, alert_type: str, severity: str, evidence: dict) -> int:
+        """Insert an alerts row. Returns the new row id."""
+        evidence_json = json.dumps(evidence)
+
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO alerts (ip_address, alert_type, severity, evidence)
+                    VALUES ($1, $2, $3, $4::jsonb)
+                    RETURNING id
+                    """,
+                    ip_address, alert_type, severity, evidence_json,
+                )
+                return row["id"]
+
+        def _work(conn: sqlite3.Connection):
+            cur = conn.execute(
+                """
+                INSERT INTO alerts (ip_address, alert_type, severity, evidence)
+                VALUES (?, ?, ?, ?)
+                """,
+                (ip_address, alert_type, severity, evidence_json),
             )
             return cur.lastrowid
 
