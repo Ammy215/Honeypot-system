@@ -14,7 +14,10 @@ pandas==3.0.5
 # HTTP
 requests==2.34.2
 
-# AI
+# AI (v2 analyst — Gemini, direct SDK, no LangChain)
+google-genai==2.17.0
+
+# AI (v1 legacy honeypot/ai/analyst.py only — not used by the v2 dashboard)
 openai==2.53.0
 
 # Logging

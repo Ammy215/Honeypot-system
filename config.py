@@ -30,8 +30,8 @@ LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 # ── Threat Intelligence APIs ─────────────────────────────
 ABUSEIPDB_API_KEY = os.getenv("ABUSEIPDB_API_KEY")
 OTX_API_KEY = os.getenv("OTX_API_KEY")  # re-introduced in v2 phase 3 — actually used this time
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # AI analyst (phase 6) — swapped from OpenAI to Gemini
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 # ── Geolocation ──────────────────────────────────────────
 GEOIP_API_URL = "http://ip-api.com/json"   # Free, no key needed

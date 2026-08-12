@@ -962,5 +962,87 @@ class AsyncDatabase:
 
         return await self._run_sqlite(_work)
 
+    # ── AI analyst (phase 6) ──────────────────────────────────────────
+
+    async def list_connections_for_ip(self, ip_address: str, limit: int = 50) -> list:
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT service, port, connected_at FROM connections "
+                    "WHERE ip_address = $1 ORDER BY connected_at DESC LIMIT $2",
+                    ip_address, limit,
+                )
+                return [dict(r) for r in rows]
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(
+                "SELECT service, port, connected_at FROM connections "
+                "WHERE ip_address = ? ORDER BY connected_at DESC LIMIT ?",
+                (ip_address, limit),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+        return await self._run_sqlite(_work)
+
+    async def list_alerts_for_ip(self, ip_address: str, limit: int = 20) -> list:
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT alert_type, severity, evidence, created_at FROM alerts "
+                    "WHERE ip_address = $1 ORDER BY created_at DESC LIMIT $2",
+                    ip_address, limit,
+                )
+                return [dict(r) for r in rows]
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(
+                "SELECT alert_type, severity, evidence, created_at FROM alerts "
+                "WHERE ip_address = ? ORDER BY created_at DESC LIMIT ?",
+                (ip_address, limit),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+        return await self._run_sqlite(_work)
+
+    async def record_ai_report(self, ip_address: str, report_text: str) -> int:
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "INSERT INTO ai_reports (ip_address, report_text) VALUES ($1, $2) RETURNING id",
+                    ip_address, report_text,
+                )
+                return row["id"]
+
+        def _work(conn: sqlite3.Connection):
+            cur = conn.execute(
+                "INSERT INTO ai_reports (ip_address, report_text) VALUES (?, ?)", (ip_address, report_text)
+            )
+            return cur.lastrowid
+
+        return await self._run_sqlite(_work)
+
+    async def list_ai_reports_for_ip(self, ip_address: str, limit: int = 10) -> list:
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT id, report_text, generated_at FROM ai_reports "
+                    "WHERE ip_address = $1 ORDER BY generated_at DESC LIMIT $2",
+                    ip_address, limit,
+                )
+                return [dict(r) for r in rows]
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(
+                "SELECT id, report_text, generated_at FROM ai_reports "
+                "WHERE ip_address = ? ORDER BY generated_at DESC LIMIT ?",
+                (ip_address, limit),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+        return await self._run_sqlite(_work)
+
 
 db = AsyncDatabase()
