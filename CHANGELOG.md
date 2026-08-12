@@ -41,3 +41,13 @@ individual `PHASE1_COMPLETE.md`–`PHASE6_COMPLETE.md` status logs.
 - Enforced the per-IP connection cap on honeypot listeners
 - Parameterized the one remaining f-string-built SQL query
 - Added `LICENSE`, project-level `CLAUDE.md`
+
+## 2026-08-13 — Option A: Constrained PaaS Deployment
+- Pivoted deployment from a self-hosted VPS to a free, no-card PaaS (Koyeb) running the HTTP honeypot only; SSH/FTP/Telnet stay built and tested but undeployed — see README "Future Work"
+- Added forwarded-header client IP resolution (`honeypot/core/client_ip.py`): the trusted entry is counted from the right, since proxies append and a naive first-entry read would trust an attacker-forged `X-Forwarded-For`; the raw header is stored alongside the resolved IP as evidence
+- Added `$PORT` binding for the platform-injected port, `ENABLED_SERVICES` to gate which listeners start, and `IGNORE_UNFORWARDED_CONNECTIONS` to filter platform health-check probes out of captured data
+- Hardened the production database: least-privilege grants (`SELECT`/`INSERT`/`UPDATE` only, no DDL), Row Level Security on all 9 tables as defense-in-depth behind those grants, and closed Supabase's default REST API exposure (`anon`/`authenticated` revoked from the schema) — verified with a real anon key returning `permission denied`, not data
+- Split database access into three roles instead of one shared credential: `honeyshield_app` (the internet-facing honeypot process, no access to `admin_users`), `honeyshield_dashboard` (local-only, scoped to exactly what dashboard pages read/write), and the DB owner (admin/migration tasks only) — so a compromise of the deployed process can't reach admin credentials or destroy captured data
+- Rotated production AbuseIPDB and Gemini API keys, separate from dev, both live-verified; left AlienVault OTX out of production deliberately, since it issues one account-wide key with no per-project scoping, and keeping it dev-only avoids widening that credential's blast radius to other, unrelated projects
+- Added a pre-commit hook blocking key-shaped strings in staged commits, plus GitHub secret scanning and push protection as the non-bypassable server-side backstop
+- Pushed the full repository history to GitHub for the first time
