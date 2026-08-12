@@ -52,6 +52,20 @@ FORWARDED_IP_HEADER = os.getenv("FORWARDED_IP_HEADER", "x-forwarded-for").strip(
 # 1 = bare PaaS load balancer. 2 = Cloudflare in front of the PaaS.
 TRUSTED_PROXY_HOPS = int(os.getenv("TRUSTED_PROXY_HOPS", "1"))
 
+# Drop connections that arrive without a forwarding header when we're behind a
+# proxy. Platform health checks probe the instance directly rather than through
+# the load balancer, so they carry no forwarding header — without this they get
+# recorded as attacker connections every few seconds and bury the real signal
+# (which, on a PaaS hostname, is only dozens of hits per day).
+#
+# Opt-in and default off: if the load balancer ever stopped sending the header,
+# this would silently discard real traffic. Enable it in production only after
+# confirming real requests do arrive with the header. Ignored entirely when
+# TRUST_PROXY_HEADERS is false.
+IGNORE_UNFORWARDED_CONNECTIONS = (
+    os.getenv("IGNORE_UNFORWARDED_CONNECTIONS", "false").lower() == "true"
+)
+
 # ── Database (v1, legacy dashboard/auth — unchanged) ─────
 DATABASE_PATH = "data/honeypot.db"
 

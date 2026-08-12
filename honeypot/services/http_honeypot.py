@@ -45,6 +45,18 @@ class HTTPHoneypot(AsyncHoneypotService):
         headers = self._parse_headers(request_data) if request_data else {}
         ip_address, forwarded_raw = resolve_client_ip(headers, peer_ip)
 
+        # Infrastructure noise: behind a proxy, anything arriving without a
+        # forwarding header bypassed the load balancer, which in practice means
+        # a platform health check. Recording those would swamp the real signal.
+        if (
+            config.TRUST_PROXY_HEADERS
+            and config.IGNORE_UNFORWARDED_CONNECTIONS
+            and not forwarded_raw
+        ):
+            self.logger.debug(f"Ignoring unforwarded connection from {peer_ip} (health check?)")
+            await self._send_html(writer, 200, self._not_found_html())
+            return
+
         if forwarded_raw and ip_address != peer_ip:
             self.logger.info(f"HTTP connection from {ip_address} (via proxy {peer_ip})")
         else:

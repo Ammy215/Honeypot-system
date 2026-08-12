@@ -246,6 +246,58 @@ check("attackers table keyed on the resolved IP only", attacker_ips, [E2E_ATTACK
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+section("2b. Health-check filtering (IGNORE_UNFORWARDED_CONNECTIONS)")
+# ─────────────────────────────────────────────────────────────────────────────
+
+HC_PORT = 18081
+
+
+async def health_check_probe(ignore_unforwarded):
+    """Send one request WITHOUT a forwarding header, as a platform health check
+    does when it probes the instance directly rather than through the LB."""
+    config.TRUST_PROXY_HEADERS = True
+    config.IGNORE_UNFORWARDED_CONNECTIONS = ignore_unforwarded
+
+    service = HTTPHoneypot(port=HC_PORT, host="127.0.0.1")
+    server_task = asyncio.create_task(service.start())
+    await asyncio.sleep(0.4)
+
+    reader, writer = await asyncio.open_connection("127.0.0.1", HC_PORT)
+    writer.write(b"GET /admin HTTP/1.1\r\nHost: healthcheck\r\n\r\n")
+    await writer.drain()
+    resp = await reader.read(4096)
+    writer.close()
+    await writer.wait_closed()
+    await asyncio.sleep(0.5)
+
+    stopped = service.stop()
+    server_task.cancel()
+    await stopped
+    return resp.decode("utf-8", errors="ignore")
+
+
+def connection_count():
+    c = sqlite3.connect(TEST_DB)
+    n = c.execute("SELECT COUNT(*) FROM connections").fetchone()[0]
+    c.close()
+    return n
+
+
+before = connection_count()
+hc_resp = asyncio.run(health_check_probe(ignore_unforwarded=True))
+check("health check still gets a valid HTTP response", hc_resp.startswith("HTTP/1.1"), True)
+check("health check does NOT create a connection row", connection_count(), before)
+
+# With the flag off (the default), the same probe must be recorded — proving the
+# filter is what suppressed it, not some unrelated failure to log.
+before = connection_count()
+asyncio.run(health_check_probe(ignore_unforwarded=False))
+check("same probe IS recorded when the flag is off", connection_count(), before + 1)
+
+config.IGNORE_UNFORWARDED_CONNECTIONS = False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 section("3. $PORT binding  /  4. ENABLED_SERVICES gating")
 # ─────────────────────────────────────────────────────────────────────────────
 
