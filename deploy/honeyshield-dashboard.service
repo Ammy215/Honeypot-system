@@ -1,0 +1,32 @@
+[Unit]
+Description=HoneyShield Streamlit dashboard (127.0.0.1 only — see .streamlit/config.toml)
+After=network.target honeyshield.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=honeyshield
+Group=honeyshield
+WorkingDirectory=/opt/honeyshield
+EnvironmentFile=/opt/honeyshield/.env
+ExecStart=/opt/honeyshield/.venv/bin/streamlit run /opt/honeyshield/dashboard/app.py
+Restart=on-failure
+RestartSec=5
+
+# Resource limits (HONEYSHIELD_PROJECT.md section 6.8) — sized for a 1GB
+# Oracle Cloud "Always Free" micro instance running this alongside the
+# honeypot service; raise if deployed on a larger shape (e.g. Ampere A1).
+# Streamlit + Plotly + Pandas need more headroom than the honeypot core.
+MemoryMax=512M
+CPUQuota=50%
+
+# Process hardening (HONEYSHIELD_PROJECT.md section 6.1: non-root, isolated)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/honeyshield/data /opt/honeyshield/logs
+
+[Install]
+WantedBy=multi-user.target
