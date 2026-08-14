@@ -111,8 +111,8 @@ ORDER BY tablename, cmd;
 
 -- ── 6. Connection string ──────────────────────────────────────────────────
 -- Put this in the LOCAL .env used to run `streamlit run dashboard/app.py` —
--- never in Koyeb's env config, which holds honeyshield_app for the deployed
--- honeypot instead. Keep DB_SSL_MODE=require and SKIP_SCHEMA_INIT=true —
--- this role cannot run CREATE TABLE either.
+-- never in the deployed platform's env config (see docs/RENDER.md), which holds
+-- honeyshield_app for the deployed honeypot instead. Keep DB_SSL_MODE=require
+-- and SKIP_SCHEMA_INIT=true — this role cannot run CREATE TABLE either.
 --
 --   DATABASE_URL=postgresql://honeyshield_dashboard.<project-ref>:<password>@<pooler-host>:5432/postgres

@@ -58,15 +58,19 @@ generate a second, project-scoped key the way AbuseIPDB and Gemini allow. The
 existing key is already shared with other, unrelated projects on this account.
 
 Given that, **the decision made here is to keep it dev-only and never deploy it to
-Koyeb.** Putting a cross-project credential into a third-party platform's env store
-would widen its blast radius past this deployment — a Koyeb compromise would then
-expose whatever else that key protects, not just this honeypot.
+the hosting platform.** Putting a cross-project credential into a third-party
+platform's env store would widen its blast radius past this deployment — a
+platform-side compromise would then expose whatever else that key protects, not
+just this honeypot. This reasoning is independent of which specific platform is
+used (Koyeb, then Render after Koyeb's free tier closed to new signups) — it
+follows from OTX's one-key-per-account limitation, not from anything
+platform-specific.
 
 The app degrades cleanly without it: `_has_api_key()` in
 `honeypot/intelligence/async_otx.py` gates every OTX call, tested since Phase 3. In
 production, OTX pulse-match enrichment (one of 14 scoring factors, weight 15/100)
 simply doesn't populate — nothing crashes, nothing else is affected. See
-`docs/KOYEB.md`'s environment variable table.
+`docs/RENDER.md`'s environment variable table.
 
 If OTX enrichment in production ever becomes a priority, the only way to get a
 project-scoped key is a **separate AlienVault OTX account** dedicated to this
