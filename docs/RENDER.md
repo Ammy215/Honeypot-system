@@ -109,7 +109,7 @@ supports marking values as secret/hidden in the dashboard).
 | `TRUST_PROXY_HEADERS` | `true` | Without this every attacker records as Render's edge |
 | `TRUSTED_PROXY_HOPS` | `2` (starting value — **see §5, this needs live confirmation**) | Anecdotal evidence (a Render community thread, not official docs) suggests Render's proxy chain appends twice — an edge layer, then an internal reverse proxy — unlike Koyeb's single hop. If §5 shows the real IP one position further left than expected, this is why |
 | `FORWARDED_IP_HEADER` | `x-forwarded-for` | Render's reverse proxy appends to this without stripping attacker-supplied values first — confirmed via Render's own community forum, consistent with our anti-spoofing design |
-| `IGNORE_UNFORWARDED_CONNECTIONS` | `false` | **Leave false until §5 passes** |
+| `IGNORE_UNFORWARDED_CONNECTIONS` | `false` | **Leave false until §5 passes.** Filtered connections aren't dropped silently — they're logged to a separate `filtered_connections` table, not `attackers`/`connections`, so filtered traffic stays visible and distinguishable from genuinely low traffic during §7 |
 | `ABUSEIPDB_API_KEY` | production key | Rotated, honeypot-only |
 | `GEMINI_API_KEY` | production key | Rotated, honeypot-only, live-verified |
 | `GEMINI_MODEL` | `gemini-flash-latest` | |
@@ -191,6 +191,19 @@ streamlit run dashboard/app.py
       geolocation/AbuseIPDB/OTX enrichment populated → threat score and verdict set
       → alerts fired where warranted.
 - [ ] Note time-to-first-unsolicited-connection.
+- [ ] Check `filtered_connections` alongside `connections` — this is what tells
+      "genuinely low traffic" apart from "traffic getting filtered," which would
+      otherwise look identical from outside once `IGNORE_UNFORWARDED_CONNECTIONS`
+      is on:
+      ```sql
+      SELECT peer_ip, method, path, filtered_at FROM filtered_connections
+      ORDER BY filtered_at DESC LIMIT 50;
+      ```
+      Expect this to be dominated by one or two `peer_ip` values hitting
+      repeatedly with no `path` (or the same one or two paths) — that's the
+      platform's own health checker. A `peer_ip` that only shows up once, or a
+      `path` unrelated to a health check, is worth a second look: it may be real
+      traffic that's being incorrectly filtered rather than genuine noise.
 
 **Calibrate expectations:** a PaaS hostname is not IP-addressable, so mass IPv4
 scanners never reach it. Expect **dozens of hits per 48 h, not thousands**, mostly

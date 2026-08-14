@@ -50,13 +50,22 @@ GRANT SELECT, INSERT, UPDATE ON
     ioc_matches
 TO honeyshield_app;
 
+-- ── 2b. Filtered-connection log (INSERT only) ─────────────────────────────
+-- filtered_connections holds connections dropped by IGNORE_UNFORWARDED_
+-- CONNECTIONS (config.py) — see schema_postgres.sql for the full rationale.
+-- Deliberately narrower than the tables above: nothing in the app ever reads
+-- this table back, so it gets INSERT only, not SELECT/UPDATE. Matches the
+-- same evidenced-grants-only discipline used for grants_dashboard.sql.
+GRANT INSERT ON filtered_connections TO honeyshield_app;
+
 -- ── 3. Sequences (BIGSERIAL primary keys) ─────────────────────────────────
 GRANT USAGE ON
     connections_id_seq,
     login_attempts_id_seq,
     attacker_commands_id_seq,
     alerts_id_seq,
-    ai_reports_id_seq
+    ai_reports_id_seq,
+    filtered_connections_id_seq
 TO honeyshield_app;
 
 -- ── 4. Explicitly deny the admin credential table ─────────────────────────
@@ -92,9 +101,10 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authen
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon, authenticated;
 
 -- ── 5. Verify ─────────────────────────────────────────────────────────────
--- Expect exactly SELECT / INSERT / UPDATE, on the eight data tables only.
--- Any row naming admin_users, or any DELETE/TRUNCATE/REFERENCES/TRIGGER
--- privilege, means something above did not apply.
+-- Expect SELECT/INSERT/UPDATE on the eight main data tables, plus INSERT-only
+-- on filtered_connections (25 rows total). Any row naming admin_users, or any
+-- DELETE/TRUNCATE/REFERENCES/TRIGGER privilege, means something above did not
+-- apply.
 SELECT table_name, privilege_type
 FROM information_schema.role_table_grants
 WHERE grantee = 'honeyshield_app'

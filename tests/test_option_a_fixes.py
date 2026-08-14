@@ -26,7 +26,18 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEST_DB = REPO_ROOT / "data" / "test_option_a.db"
 os.environ["SQLITE_PATH"] = str(TEST_DB)
-os.environ.pop("DATABASE_URL", None)
+# NOT os.environ.pop("DATABASE_URL", None) — python-dotenv's load_dotenv() (called
+# at config.py import time, below) only preserves variables that are still PRESENT
+# in os.environ (override=False); popping the key removes that protection entirely,
+# so dotenv happily repopulates it from .env on the very next line. An empty string
+# stays present, blocking the repopulation, and config.py's own
+# `DATABASE_URL = os.getenv("DATABASE_URL", "")` already treats "" as unset.
+# Caught live: this exact gap let a real production DATABASE_URL leak into a test
+# run once .env had one — the only reason it didn't write real rows is that the
+# role in use (honeyshield_dashboard) lacks INSERT on attackers/connections and
+# was correctly rejected. Confirmed via a direct production query: zero rows,
+# no pollution occurred. Still a real bug, fixed here regardless.
+os.environ["DATABASE_URL"] = ""
 sys.path.insert(0, str(REPO_ROOT))
 
 import asyncio  # noqa: E402
@@ -35,6 +46,15 @@ import types  # noqa: E402
 
 import config  # noqa: E402
 from honeypot.core.client_ip import resolve_client_ip  # noqa: E402
+
+# Second instance of the same leak class as the DATABASE_URL fix above, caught
+# in the same debugging session: SKIP_SCHEMA_INIT=true in the real .env (set for
+# the production/dashboard roles, which can't run CREATE TABLE) silently no-ops
+# init_schema() here too, leaving the test SQLite file schema-less. Unlike
+# DATABASE_URL, this one is read fresh on every init_schema() call rather than
+# baked in at import time, so a direct post-import override is sufficient —
+# no need for the os.environ trick used above.
+config.SKIP_SCHEMA_INIT = False
 
 PASS, FAIL = [], []
 
@@ -276,23 +296,75 @@ async def health_check_probe(ignore_unforwarded):
     return resp.decode("utf-8", errors="ignore")
 
 
-def connection_count():
+def table_count(table):
     c = sqlite3.connect(TEST_DB)
-    n = c.execute("SELECT COUNT(*) FROM connections").fetchone()[0]
+    n = c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
     c.close()
     return n
 
 
+def connection_count():
+    return table_count("connections")
+
+
 before = connection_count()
+before_attackers = table_count("attackers")
+before_filtered = table_count("filtered_connections")
 hc_resp = asyncio.run(health_check_probe(ignore_unforwarded=True))
 check("health check still gets a valid HTTP response", hc_resp.startswith("HTTP/1.1"), True)
 check("health check does NOT create a connection row", connection_count(), before)
+check("health check does NOT create an attackers row", table_count("attackers"), before_attackers)
+check(
+    "health check IS logged to filtered_connections instead — visible, not silently dropped",
+    table_count("filtered_connections"), before_filtered + 1,
+)
 
-# With the flag off (the default), the same probe must be recorded — proving the
-# filter is what suppressed it, not some unrelated failure to log.
+fc = sqlite3.connect(TEST_DB)
+row = fc.execute(
+    "SELECT peer_ip, service, method, path FROM filtered_connections ORDER BY id DESC LIMIT 1"
+).fetchone()
+fc.close()
+check("filtered_connections row has the real HTTP method/path parsed out", (row[2], row[3]), ("GET", "/admin"))
+check("filtered_connections row is tagged with the right service", row[1], "http")
+
+# With the flag off (the default), the same probe must be recorded normally —
+# proving the filter is what suppressed it, not some unrelated failure to log —
+# and filtered_connections must stay untouched (only the OFF-path writes there).
 before = connection_count()
+before_filtered = table_count("filtered_connections")
 asyncio.run(health_check_probe(ignore_unforwarded=False))
-check("same probe IS recorded when the flag is off", connection_count(), before + 1)
+check("same probe IS recorded normally when the flag is off", connection_count(), before + 1)
+check("filtered_connections NOT written to when the flag is off", table_count("filtered_connections"), before_filtered)
+
+
+async def bare_tcp_probe():
+    """A true TCP-only health check: connect, send nothing, disconnect — the
+    other sub-case besides an HTTP request that merely lacks the header."""
+    config.TRUST_PROXY_HEADERS = True
+    config.IGNORE_UNFORWARDED_CONNECTIONS = True
+
+    service = HTTPHoneypot(port=HC_PORT + 1, host="127.0.0.1")
+    server_task = asyncio.create_task(service.start())
+    await asyncio.sleep(0.4)
+
+    reader, writer = await asyncio.open_connection("127.0.0.1", HC_PORT + 1)
+    writer.close()  # no bytes sent at all
+    await writer.wait_closed()
+    await asyncio.sleep(0.6)
+
+    stopped = service.stop()
+    server_task.cancel()
+    await stopped
+
+
+before_filtered = table_count("filtered_connections")
+asyncio.run(bare_tcp_probe())
+check("bare TCP probe (no HTTP at all) is also logged to filtered_connections", table_count("filtered_connections"), before_filtered + 1)
+
+fc = sqlite3.connect(TEST_DB)
+row = fc.execute("SELECT method, path FROM filtered_connections ORDER BY id DESC LIMIT 1").fetchone()
+fc.close()
+check("bare TCP probe has NULL method/path, not a crash", (row[0], row[1]), (None, None))
 
 config.IGNORE_UNFORWARDED_CONNECTIONS = False
 
@@ -311,8 +383,11 @@ SUBPROC_ENV = {"PYTHONIOENCODING": "utf-8"}
 
 def probe(env_extra, expr):
     """Read a config value in a clean subprocess, so env is applied at import."""
+    # Inherit os.environ as-is (DATABASE_URL="" already set above) — do NOT
+    # pop() it here, which would remove the "present but empty" protection
+    # against python-dotenv repopulating it from .env. See the note at the
+    # top of this file.
     env = {**os.environ, **SUBPROC_ENV, **env_extra}
-    env.pop("DATABASE_URL", None)
     out = subprocess.run(
         [sys.executable, "-c", f"import config; print({expr})"],
         capture_output=True, text=True, cwd=REPO_ROOT, env=env,

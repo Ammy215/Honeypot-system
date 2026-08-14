@@ -162,6 +162,44 @@ class AsyncDatabase:
 
         return await self._run_sqlite(_work)
 
+    async def record_filtered_connection(
+        self, peer_ip: str, service: str, port: int, method: Optional[str], path: Optional[str]
+    ) -> None:
+        """
+        Record a connection dropped by IGNORE_UNFORWARDED_CONNECTIONS, separate
+        from attackers/connections so the real capture tables stay untouched.
+        peer_ip is the raw, unresolved socket peer — not a validated attacker
+        identity — so this never touches the attackers table at all.
+
+        No RETURNING id, deliberately: honeyshield_app's grant on this table is
+        INSERT-only (nothing in the app ever reads it back), and under RLS,
+        RETURNING requires the inserted row to be visible under a SELECT policy
+        — which doesn't exist here by design. Adding one just to support an id
+        nothing consumes would be over-granting a diagnostic-only table. Caught
+        live: a plain INSERT ... RETURNING id here failed with "permission
+        denied for table filtered_connections" even though the INSERT grant and
+        RLS policy were both confirmed correct — the RETURNING clause itself
+        was the problem, not the privileges.
+        """
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO filtered_connections (peer_ip, service, port, method, path)
+                    VALUES ($1, $2, $3, $4, $5)
+                    """,
+                    peer_ip, service, port, method, path,
+                )
+            return
+
+        def _work(conn: sqlite3.Connection):
+            conn.execute(
+                "INSERT INTO filtered_connections (peer_ip, service, port, method, path) VALUES (?, ?, ?, ?, ?)",
+                (peer_ip, service, port, method, path),
+            )
+
+        await self._run_sqlite(_work)
+
     async def record_login_attempt(
         self, connection_id: int, ip_address: str, username: Optional[str], password: Optional[str]
     ) -> int:

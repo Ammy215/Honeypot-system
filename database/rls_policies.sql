@@ -73,6 +73,17 @@ BEGIN
     END LOOP;
 END $$;
 
+-- ── filtered_connections: INSERT-only policy, matching its narrower grant ──
+-- Unlike the loop above, this table only has an INSERT grant for
+-- honeyshield_app (see grants_production.sql §2b) — nothing in the app ever
+-- reads it back — so it gets one policy, not three, keeping policies an exact
+-- mirror of grants rather than a superset that implies access that isn't there.
+ALTER TABLE public.filtered_connections ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS honeyshield_app_insert ON public.filtered_connections;
+CREATE POLICY honeyshield_app_insert ON public.filtered_connections
+    FOR INSERT TO honeyshield_app WITH CHECK (current_user = 'honeyshield_app');
+
 -- ── admin_users: RLS enabled, deliberately ZERO policies ──────────────────
 -- honeyshield_app has no grants here at all (see grants_production.sql §4),
 -- so no policy is added for it either — enabling RLS with nothing to admit
@@ -82,14 +93,15 @@ END $$;
 ALTER TABLE public.admin_users ENABLE ROW LEVEL SECURITY;
 
 -- ── Verify ──────────────────────────────────────────────────────────────
--- Expect all 9 rows with rowsecurity = true.
+-- Expect all 10 rows with rowsecurity = true.
 SELECT schemaname, tablename, rowsecurity
 FROM pg_tables
 WHERE schemaname = 'public'
 ORDER BY tablename;
 
--- Expect exactly 3 rows per data table (select/insert/update), 0 for
--- admin_users, all restricted to honeyshield_app.
+-- Expect 3 rows per main data table (select/insert/update), 1 row
+-- (insert-only) for filtered_connections, 0 for admin_users, all restricted
+-- to honeyshield_app.
 SELECT tablename, policyname, cmd, roles
 FROM pg_policies
 WHERE schemaname = 'public'

@@ -47,13 +47,34 @@ class HTTPHoneypot(AsyncHoneypotService):
 
         # Infrastructure noise: behind a proxy, anything arriving without a
         # forwarding header bypassed the load balancer, which in practice means
-        # a platform health check. Recording those would swamp the real signal.
+        # a platform health check. Recording those in attackers/connections would
+        # swamp the real signal — but dropping them with no trace at all makes
+        # "genuinely low traffic" and "traffic being filtered" indistinguishable
+        # from outside. Logged to the separate filtered_connections table instead:
+        # same response to the client, same untouched attackers/connections tables,
+        # just visible rather than invisible. Fire-and-forget (spawn_background),
+        # not awaited — a synchronous DB round-trip on every health-check ping
+        # would add latency to exactly the path this exists to keep lightweight,
+        # and could risk delaying the health check response itself.
         if (
             config.TRUST_PROXY_HEADERS
             and config.IGNORE_UNFORWARDED_CONNECTIONS
             and not forwarded_raw
         ):
-            self.logger.debug(f"Ignoring unforwarded connection from {peer_ip} (health check?)")
+            filtered_method, filtered_path = None, None
+            if request_data:
+                first_line = request_data.split("\n", 1)[0].strip().split()
+                if len(first_line) >= 2:
+                    filtered_method, filtered_path = first_line[0].upper(), first_line[1]
+
+            self.spawn_background(db.record_filtered_connection(
+                peer_ip=peer_ip, service="http", port=self.port,
+                method=filtered_method, path=filtered_path,
+            ))
+            self.logger.debug(
+                f"Filtered unforwarded connection from {peer_ip} "
+                f"(method={filtered_method}, path={filtered_path})"
+            )
             await self._send_html(writer, 200, self._not_found_html())
             return
 

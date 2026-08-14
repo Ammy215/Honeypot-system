@@ -96,3 +96,17 @@ CREATE TABLE IF NOT EXISTS admin_users (
 
 CREATE INDEX IF NOT EXISTS idx_connections_ip_time ON connections(ip_address, connected_at);
 CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_time ON login_attempts(ip_address, attempted_at);
+
+-- Connections dropped by IGNORE_UNFORWARDED_CONNECTIONS (see schema_postgres.sql
+-- for the full rationale). Brand-new tables are picked up automatically by
+-- CREATE TABLE IF NOT EXISTS on the next init_schema() run — unlike adding a
+-- column to an existing table, no _migrate_sqlite() entry is needed for this.
+CREATE TABLE IF NOT EXISTS filtered_connections (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    peer_ip      TEXT NOT NULL,
+    service      TEXT NOT NULL,
+    port         INTEGER NOT NULL,
+    method       TEXT,
+    path         TEXT,
+    filtered_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);

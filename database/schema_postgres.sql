@@ -98,3 +98,22 @@ CREATE TABLE IF NOT EXISTS admin_users (
 
 CREATE INDEX IF NOT EXISTS idx_connections_ip_time ON connections(ip_address, connected_at);
 CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_time ON login_attempts(ip_address, attempted_at);
+
+-- Connections dropped by IGNORE_UNFORWARDED_CONNECTIONS (config.py) — a proxy
+-- header was expected but absent, in practice almost always a platform health
+-- check. Deliberately separate from `connections`/`attackers`: this is
+-- unvalidated noise-filtering, not captured attacker data, and mixing the two
+-- would corrupt real detection/scoring. Exists so "genuinely low traffic" and
+-- "traffic being silently filtered" are distinguishable during a live
+-- validation window instead of both looking identical from outside — see
+-- docs/RENDER.md. No FK to attackers(ip_address): peer_ip here is the raw,
+-- unresolved socket peer, not a trusted/resolved attacker identity.
+CREATE TABLE IF NOT EXISTS filtered_connections (
+    id           BIGSERIAL PRIMARY KEY,
+    peer_ip      INET NOT NULL,
+    service      TEXT NOT NULL,
+    port         INT NOT NULL,
+    method       TEXT,                    -- NULL when no HTTP data arrived at all (bare TCP probe)
+    path         TEXT,                    -- NULL when no HTTP data arrived at all
+    filtered_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
