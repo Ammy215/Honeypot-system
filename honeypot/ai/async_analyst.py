@@ -48,6 +48,20 @@ SYSTEM_PROMPT = (
 )
 
 
+def _describe(exc: Exception) -> str:
+    """
+    Human-readable description of an exception, safe for display.
+
+    Some exceptions carry no message at all — httpx.ReadTimeout is the one that
+    bit us in pre-deployment testing, where str(e) is literally "". Interpolating
+    that straight into an error string produced "AI report generation failed: ",
+    which tells the operator nothing about what went wrong. Fall back to the
+    exception class name so there is always a cause to act on.
+    """
+    text = str(exc).strip()
+    return text if text else f"{type(exc).__name__} (no further detail)"
+
+
 def is_available() -> bool:
     return bool(config.GEMINI_API_KEY) and config.GEMINI_API_KEY != "your_key_here"
 
@@ -55,7 +69,11 @@ def is_available() -> bool:
 def _get_client() -> genai.Client:
     global _client
     if _client is None:
-        _client = genai.Client(api_key=config.GEMINI_API_KEY, http_options=types.HttpOptions(timeout=30000))
+        # 60s, not 30s: a typical report completes in ~6s, but a transient slow
+        # response exceeded 30s during pre-deployment testing and surfaced as a
+        # bare httpx.ReadTimeout. The extra headroom is free (the call returns as
+        # soon as it's done) and turns an occasional hard failure into a wait.
+        _client = genai.Client(api_key=config.GEMINI_API_KEY, http_options=types.HttpOptions(timeout=60000))
     return _client
 
 
@@ -179,18 +197,18 @@ async def generate_attacker_report(ip_address: str) -> Dict:
         if not report_text:
             raise ValueError("Gemini returned an empty response (possibly blocked by safety filters)")
     except APIError as e:
-        logger.error(f"Gemini API error generating report for {ip_address}: {e}")
+        logger.error(f"Gemini API error generating report for {ip_address}: {_describe(e)}")
         return {
             "ip_address": ip_address,
-            "report_text": f"AI report generation failed: {e}",
+            "report_text": f"AI report generation failed: {_describe(e)}",
             "generated_at": generated_at,
             "error": True,
         }
     except Exception as e:
-        logger.error(f"Unexpected error generating AI report for {ip_address}: {e}")
+        logger.error(f"Unexpected error generating AI report for {ip_address}: {_describe(e)}")
         return {
             "ip_address": ip_address,
-            "report_text": f"AI report generation failed: {e}",
+            "report_text": f"AI report generation failed: {_describe(e)}",
             "generated_at": generated_at,
             "error": True,
         }
