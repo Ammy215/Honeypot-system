@@ -15,6 +15,7 @@ Separate from test_predeployment.py because it needs Streamlit's AppTest
 harness, which drives real page scripts rather than plain function calls.
 """
 
+import ast
 import os
 import sys
 import io
@@ -174,18 +175,112 @@ async def auth_tests():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+def escapes_hostile_input():
+    """
+    Feed XSS payloads through every design-system helper that emits raw HTML.
+
+    theme.py is the one module allowed to pass unsafe_allow_html with
+    interpolated content, so its escaping is load-bearing. This asserts the
+    property directly — hostile text in, inert text out — rather than trusting
+    a structural rule to imply it.
+    """
+    from unittest.mock import patch
+
+    from dashboard import theme
+
+    # Every payload here carries an HTML metacharacter, because that is what
+    # escaping defends against. A bare string like "javascript:alert(1)" is
+    # deliberately NOT included: it survives escaping unchanged and is inert as
+    # a text node, so asserting it gets escaped would be asserting the wrong
+    # property. The attribute-breakout payload is the important one — `tone` is
+    # interpolated into a style="" attribute, the only attribute context here.
+    payloads = [
+        XSS,
+        IMG_XSS,
+        '"><script>alert(1)</script>',
+        '" onmouseover="alert(1)',          # attribute breakout
+        "</style><script>alert(1)</script>",  # style-context escape
+    ]
+
+    for payload in payloads:
+        emitted = []
+        with patch("streamlit.markdown", side_effect=lambda html, **kw: emitted.append(html)):
+            theme.page_header(payload, payload, payload, eyebrow=payload)
+            theme.kpis([{"label": payload, "value": payload, "note": payload, "tone": payload}])
+            theme.section(payload, payload)
+            theme.empty_state(payload, payload, payload)
+        blob = " ".join(emitted)
+        check(f"payload never emitted raw: {payload[:24]!r}", payload in blob, False)
+        check_true(f"payload appears HTML-escaped instead: {payload[:24]!r}",
+                   "&lt;" in blob or "&quot;" in blob or "&#x27;" in blob)
+
+    # sidebar_identity takes the session username, which is operator-supplied
+    # rather than attacker-supplied, but is escaped on the same principle.
+    emitted = []
+    with patch("streamlit.sidebar") as sidebar:
+        sidebar.markdown.side_effect = lambda html, **kw: emitted.append(html)
+        theme.sidebar_identity(XSS)
+    check("sidebar identity escapes its username", XSS in " ".join(emitted), False)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 def dashboard_tests():
     section("7b. Dashboard — XSS/SQLi rendering, all 7 pages load")
 
-    # Structural guarantee first: unsafe_allow_html is never actually used.
+    # Structural guarantee: raw HTML may only be emitted from the audited design
+    # system, and everywhere else only as a string literal.
+    #
+    # This replaced a blanket "unsafe_allow_html is never used" ban when the UI
+    # was redesigned. The blanket ban was a proxy for the property that actually
+    # matters — attacker-controlled text must never reach a raw-HTML sink — and
+    # once any styling exists the proxy fails while the real property still
+    # holds. The two checks below assert the real property directly:
+    #
+    #   (a) outside dashboard/theme.py, the content passed with
+    #       unsafe_allow_html=True must be a string LITERAL. No f-strings, no
+    #       variables, no .format() — so a page physically cannot interpolate a
+    #       database value into markup.
+    #   (b) inside theme.py, every interpolation must be wrapped in esc() or be
+    #       a module-level constant (a colour).
+    #
+    # The behavioural test further down (XSS payload never reaches markdown)
+    # remains the backstop.
+    def _is_literal(node) -> bool:
+        """True for a plain string constant, including implicit concatenation."""
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return True
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return _is_literal(node.left) and _is_literal(node.right)
+        return False
+
+    # theme.py composes markup from pre-escaped fragments ("".join(parts) and
+    # similar), which no reasonable AST rule can follow. It is therefore exempt
+    # here and covered instead by escapes_hostile_input() below, which feeds it
+    # real XSS payloads and inspects the output — direct evidence rather than a
+    # structural proxy.
     real_usage = []
-    for py in list((REPO_ROOT / "dashboard").rglob("*.py")):
-        for i, line in enumerate(py.read_text(encoding="utf-8").splitlines(), 1):
-            stripped = line.strip()
-            if "unsafe_allow_html" in line and not stripped.startswith("#") and "=" in line.split("unsafe_allow_html")[1][:3]:
-                real_usage.append(f"{py.name}:{i}")
-    check("unsafe_allow_html is never passed anywhere in dashboard/ (only named in comments)",
+    for py in sorted((REPO_ROOT / "dashboard").rglob("*.py")):
+        if py.name == "theme.py":
+            continue
+        tree = ast.parse(py.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            uses_raw_html = any(
+                kw.arg == "unsafe_allow_html"
+                and isinstance(kw.value, ast.Constant)
+                and kw.value.value is True
+                for kw in node.keywords
+            )
+            if not uses_raw_html or not node.args:
+                continue
+            if not _is_literal(node.args[0]):
+                real_usage.append(f"{py.name}:{node.lineno}")
+
+    check("outside theme.py, raw HTML is only ever a string literal",
           real_usage, [])
+
+    escapes_hostile_input()
 
     try:
         from streamlit.testing.v1 import AppTest

@@ -9,3 +9,25 @@ headless = true
 
 [browser]
 gatherUsageStats = false
+
+[client]
+# Hide Streamlit's own toolbar (the "Deploy" button and hamburger menu).
+# Those exist to push apps to Streamlit Community Cloud, which is the exact
+# opposite of this app's threat model — it must never leave localhost.
+toolbarMode = "minimal"
+# Page navigation stays enabled — Streamlit's own nav is the only thing that
+# resolves page routes reliably. It is hidden before authentication by CSS in
+# dashboard/theme.py so the login screen does not advertise the app's
+# structure; every page still gates independently.
+showSidebarNavigation = true
+
+# Base palette. The rest of the design system lives in dashboard/theme.py;
+# these are the values Streamlit needs natively to paint its own widgets
+# (inputs, sliders, selects) so they don't fight the custom CSS.
+[theme]
+base = "dark"
+primaryColor = "#F5A524"
+backgroundColor = "#0B0F17"
+secondaryBackgroundColor = "#131A27"
+textColor = "#E6EAF2"
+font = "sans serif"

@@ -47,6 +47,10 @@ passed = 0
 failed = 0
 
 
+def check_true(label: str, condition: bool, detail: str = "") -> None:
+    check(label, bool(condition), detail)
+
+
 def check(label: str, condition: bool, detail: str = "") -> None:
     global passed, failed
     if condition:
@@ -160,29 +164,68 @@ def test_pages_render():
             check(f"{path.name} renders", False, f"{type(exc).__name__}: {exc}")
 
 
+# Match the rendered elements, not the stylesheet: the injected CSS names
+# every class, so a substring check against class names alone always matches.
+HEADER_DIV = '<div class="hs-header">'
+LOGIN_DIV = '<div class="hs-login-brand">'
+
+
+def _markup(at) -> str:
+    """All markdown emitted by a run, so we can assert on design-system markers."""
+    return " ".join(str(m.value) for m in at.markdown)
+
+
 def test_pages_gate_on_auth():
     print("\n[6] every page shows login when unauthenticated")
     for path in [APP] + PAGES:
         try:
             at = render(path, authenticated=False)
-            titles = [t.value for t in at.title]
+            markup = _markup(at)
+            # The login screen renders the brand block; an authenticated page
+            # renders the page masthead. Asserting on both directions catches a
+            # page that renders its content *and* a login form.
+            gated = HEADER_DIV not in markup and LOGIN_DIV in markup
             check(
                 f"{path.name} gates on auth",
-                any("Login" in t for t in titles) and not list(at.exception),
-                f"titles={titles} exceptions={[e.message for e in at.exception]}",
+                gated and not list(at.exception),
+                f"login_brand={LOGIN_DIV in markup} "
+                f"page_header={HEADER_DIV in markup} "
+                f"exceptions={[e.message for e in at.exception]}",
             )
         except Exception as exc:  # noqa: BLE001
             check(f"{path.name} gates on auth", False, f"{type(exc).__name__}: {exc}")
+
+
+def test_login_form_is_usable():
+    print("\n[6b] the login screen actually renders a usable form")
+    at = render(APP, authenticated=False)
+    check_true(f"two inputs, username + password (got {len(at.text_input)})",
+               len(at.text_input) == 2)
+    check_true("a submit control exists", len(at.button) >= 1)
+    markup = _markup(at)
+    check_true("navigation is hidden before login", "stSidebarNav" in markup)
+    check_true("no data is rendered before login", len(at.dataframe) == 0)
 
 
 def test_live_feed_shows_filtered_panel():
     print("\n[7] Live Feed renders the filtered-traffic panel")
     live = next(p for p in PAGES if "Live_Feed" in p.name)
     at = render(live)
-    labels = [m.label for m in at.metric]
-    for expected in ("Filtered (total)", "Last hour", "Last 24h", "Most recent"):
-        check(f"metric present: {expected}", expected in labels, f"got {labels}")
-    check("subheader present", "Filtered Traffic" in [s.value for s in at.subheader])
+    markup = _markup(at)
+    # KPIs render through the design system rather than st.metric, so assert on
+    # the emitted markup instead of widget labels.
+    for expected in ("Filtered total", "Last hour", "Last 24h", "Most recent"):
+        check_true(f"KPI present: {expected}", expected in markup)
+    check_true("section heading present", "Filtered traffic" in markup)
+    check_true("KPI cards use the design system", "hs-kpi" in markup)
+
+
+def test_design_system_applied():
+    print("\n[8] the design system is applied on every page")
+    for path in [APP] + PAGES:
+        at = render(path)
+        markup = _markup(at)
+        check_true(f"{path.name} injects theme CSS", HEADER_DIV in markup and "--accent" in markup)
 
 
 if __name__ == "__main__":
@@ -196,7 +239,9 @@ if __name__ == "__main__":
     test_connect_is_idempotent()
     test_pages_render()
     test_pages_gate_on_auth()
+    test_login_form_is_usable()
     test_live_feed_shows_filtered_panel()
+    test_design_system_applied()
 
     print("\n" + "=" * 70)
     print(f"passed: {passed}   failed: {failed}")

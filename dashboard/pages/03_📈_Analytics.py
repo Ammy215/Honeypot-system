@@ -1,73 +1,103 @@
 """
-Analytics — timeline, top attackers, service/verdict breakdowns.
+Analytics — aggregate views over captured traffic.
 
-No attacker-supplied free text is rendered on this page (IPs, service
-names, and verdict labels are all our own constrained values).
+All values are counts computed in SQL; nothing here renders attacker text.
 """
 
 import sys
 from pathlib import Path
 
-import streamlit as st
 import pandas as pd
 import plotly.express as px
+import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from dashboard.login import check_authentication, show_login_page, show_user_info
+from dashboard import theme
 from dashboard.async_bridge import run as bridge_run
+from dashboard.login import require_auth
 from database.db_async import db
 
-st.set_page_config(page_title="Analytics", page_icon="📈", layout="wide")
+st.set_page_config(page_title="HoneyShield — Analytics", page_icon="📈", layout="wide")
+require_auth("📈", "Analytics")
 
-if not check_authentication():
-    show_login_page()
-    st.stop()
+theme.page_header(
+    "📈",
+    "Analytics",
+    "Volume, composition and severity of captured traffic over time.",
+    eyebrow="Aggregates",
+)
 
-show_user_info()
+with st.sidebar:
+    st.markdown("**Analytics controls**")
+    hours = st.slider("Timeline window (hours)", 1, 168, 24)
 
-st.title("📈 Analytics")
+# ── Timeline ──────────────────────────────────────────────────────────────
+theme.section("Connections over time",
+              f"Captured sessions per bucket across the last {hours} hour(s).", rule=False)
 
-hours = st.slider("Timeline window (hours)", 1, 168, 24)
-
-st.subheader("Connections Over Time")
 timeline = bridge_run(db.connections_timeline(hours=hours))
 if timeline:
     df = pd.DataFrame(timeline)
-    fig = px.bar(df, x="bucket", y="cnt", labels={"bucket": "Time", "cnt": "Connections"})
-    st.plotly_chart(fig, width='stretch')
+    fig = px.area(df, x="bucket", y="cnt", labels={"bucket": "", "cnt": "Connections"})
+    fig.update_traces(
+        line=dict(color=theme.ACCENT, width=2),
+        fillcolor="rgba(245,165,36,.13)",
+        hovertemplate="%{x}<br>%{y} connection(s)<extra></extra>",
+    )
+    st.plotly_chart(theme.style_chart(fig, height=300), width="stretch")
 else:
-    st.info("No connection data in this window yet.")
+    theme.empty_state(
+        "📉",
+        "No connections in this window",
+        "Widen the timeline window in the sidebar, or wait for traffic. On a free "
+        "PaaS tier the service sleeps when idle, so gaps are expected.",
+    )
 
-col1, col2 = st.columns(2)
+# ── Composition ───────────────────────────────────────────────────────────
+theme.section("Composition", "How captured traffic breaks down by service and by verdict.")
 
-with col1:
-    st.subheader("Connections by Service")
+left, right = st.columns(2)
+
+with left:
+    st.markdown("##### By service")
     services = bridge_run(db.service_breakdown())
     if services:
-        df = pd.DataFrame(services)
-        fig = px.pie(df, names="service", values="cnt")
-        st.plotly_chart(fig, width='stretch')
+        fig = px.pie(pd.DataFrame(services), names="service", values="cnt", hole=.58)
+        fig.update_traces(textinfo="label+percent",
+                          marker=dict(line=dict(color=theme.BG, width=2)))
+        st.plotly_chart(theme.style_chart(fig, height=290), width="stretch")
+        st.caption("Only the HTTP honeypot is deployed on the current platform; SSH, "
+                   "FTP and Telnet are built but not exposed.")
     else:
-        st.info("No connections yet.")
+        theme.empty_state("🧩", "No service data", "No connections have been captured yet.")
 
-with col2:
-    st.subheader("Attackers by Verdict")
+with right:
+    st.markdown("##### By verdict")
     verdicts = bridge_run(db.verdict_breakdown())
     if verdicts:
-        df = pd.DataFrame(verdicts)
-        color_map = {"LOW": "green", "MEDIUM": "gold", "HIGH": "orange", "CRITICAL": "red"}
-        fig = px.bar(df, x="verdict", y="cnt", color="verdict", color_discrete_map=color_map)
-        st.plotly_chart(fig, width='stretch')
+        vdf = pd.DataFrame(verdicts)
+        fig = px.bar(vdf, x="verdict", y="cnt", color="verdict",
+                     color_discrete_map={k: v for k, v in theme.SEVERITY.items()},
+                     labels={"verdict": "", "cnt": "Attackers"})
+        fig.update_layout(showlegend=False)
+        fig.update_traces(hovertemplate="%{x}: %{y}<extra></extra>")
+        st.plotly_chart(theme.style_chart(fig, height=290), width="stretch")
+        st.caption("Verdict is derived from the weighted threat score: "
+                   "LOW < 25 ≤ MEDIUM < 50 ≤ HIGH < 80 ≤ CRITICAL.")
     else:
-        st.info("No scored attackers yet.")
+        theme.empty_state("⚖️", "No scored attackers", "Scoring runs as soon as an IP is captured.")
 
-st.subheader("Top Attackers by Connection Volume")
+# ── Volume leaders ────────────────────────────────────────────────────────
+theme.section("Most active sources", "Attackers ranked by number of captured sessions.")
+
 attackers = bridge_run(db.list_attackers(limit=10))
 if attackers:
-    df = pd.DataFrame(attackers)
-    df = df.sort_values("total_connections", ascending=False)
-    fig = px.bar(df, x="ip_address", y="total_connections", hover_data=["country", "verdict"])
-    st.plotly_chart(fig, width='stretch')
+    adf = pd.DataFrame(attackers).sort_values("total_connections", ascending=True)
+    fig = px.bar(adf, x="total_connections", y="ip_address", orientation="h",
+                 hover_data=["country", "verdict"],
+                 labels={"total_connections": "Connections", "ip_address": ""})
+    fig.update_traces(marker_color=theme.ACCENT)
+    st.plotly_chart(theme.style_chart(fig, height=max(240, 44 * len(adf))), width="stretch")
 else:
-    st.info("No attackers yet.")
+    theme.empty_state("🏷️", "No attackers yet", "Nothing has reached the honeypot so far.")

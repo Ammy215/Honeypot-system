@@ -1,98 +1,132 @@
 """
 Live Feed — real-time connection stream.
 
-Nothing on this page renders attacker-controlled text: ip_address is a
-validated address, service/port are our own literals, country comes from
-ip-api.com (not attacker input). Still rendered via st.dataframe, which
-never interprets cell contents as HTML/markdown.
+Nothing on this page renders attacker-controlled text through markup:
+ip_address is a validated address, service/port are our own literals,
+country comes from ip-api.com (not attacker input). Everything from the
+database is rendered via st.dataframe, which never interprets cell
+contents as HTML/markdown.
 """
 
 import sys
 import time
 from pathlib import Path
 
-import streamlit as st
 import pandas as pd
+import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from dashboard.login import check_authentication, show_login_page, show_user_info
+from dashboard import theme
 from dashboard.async_bridge import run as bridge_run
+from dashboard.login import require_auth
 from database.db_async import db
 
-st.set_page_config(page_title="Live Feed", page_icon="🔴", layout="wide")
+st.set_page_config(page_title="HoneyShield — Live Feed", page_icon="🔴", layout="wide")
+require_auth("🔴", "Live Feed")
 
-if not check_authentication():
-    show_login_page()
-    st.stop()
+theme.page_header(
+    "🔴",
+    "Live Attack Feed",
+    "Every connection the honeypot captured, newest first, with enrichment "
+    "resolved at capture time.",
+    eyebrow="Real-time",
+)
 
-show_user_info()
-
-st.title("🔴 Live Attack Feed")
-
-auto_refresh = st.sidebar.checkbox("Auto-refresh (15s)", value=False)
-service_filter = st.sidebar.selectbox("Service", ["All", "ssh", "ftp", "telnet", "http"])
+with st.sidebar:
+    st.markdown("<div style='height:.4rem'></div>", unsafe_allow_html=True)
+    st.markdown("**Feed controls**")
+    auto_refresh = st.checkbox("Auto-refresh (15s)", value=False)
+    service_filter = st.selectbox("Service", ["All", "ssh", "ftp", "telnet", "http"])
 
 summary = bridge_run(db.summary_counts())
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Connections", summary["total_connections"])
-col2.metric("Attackers", summary["total_attackers"])
-col3.metric("Active Alerts", summary["active_alerts"])
-col4.metric("Critical", summary["critical_attackers"])
+theme.kpis([
+    {"label": "Connections", "value": summary["total_connections"], "note": "captured sessions"},
+    {"label": "Attackers", "value": summary["total_attackers"], "note": "distinct source IPs",
+     "tone": "#4A9EFF"},
+    {"label": "Active alerts", "value": summary["active_alerts"], "note": "awaiting triage",
+     "tone": theme.SEVERITY["HIGH"] if summary["active_alerts"] else theme.MUTED},
+    {"label": "Critical", "value": summary["critical_attackers"], "note": "score ≥ 80",
+     "tone": theme.SEVERITY["CRITICAL"] if summary["critical_attackers"] else theme.MUTED},
+])
 
-st.markdown("---")
-st.subheader("Recent Connections")
+# ── Connections ───────────────────────────────────────────────────────────
+theme.section("Captured connections", "Resolved source IP, service and enrichment per session.")
 
 service = None if service_filter == "All" else service_filter
 connections = bridge_run(db.list_recent_connections(limit=100, service=service))
 
 if connections:
     df = pd.DataFrame(connections)
-    st.dataframe(df, width='stretch', height=500)
-    st.caption(f"Showing {len(df)} most recent connections")
+    order = [c for c in ("connected_at", "ip_address", "country", "service", "port",
+                         "threat_score", "verdict", "id") if c in df.columns]
+    st.dataframe(df[order], width="stretch", height=430, hide_index=True)
+    st.caption(f"Showing {len(df)} most recent connection(s).")
+elif service:
+    theme.empty_state(
+        "🔍",
+        f"No {service_filter.upper()} connections",
+        "Only the HTTP honeypot is deployed on the current platform — SSH, FTP "
+        "and Telnet are built and tested but not exposed. Switch the Service "
+        "filter back to All.",
+    )
 else:
-    st.info("No connections yet.")
+    theme.empty_state(
+        "📡",
+        "Nothing captured yet",
+        "The listener is up but no connection has arrived. Check Sensor health on "
+        "the Overview page to confirm the honeypot is reachable — a quiet feed and "
+        "a dead sensor look identical here.",
+    )
 
-st.markdown("---")
-st.subheader("Filtered Traffic")
-st.caption(
-    "Connections dropped by IGNORE_UNFORWARDED_CONNECTIONS — no proxy header, "
-    "in practice the platform's own health checks. Kept out of the capture "
-    "tables above so they can't pollute detection or scoring. Shown here so an "
-    "empty feed reads as 'genuinely quiet' rather than 'silently filtered'."
+# ── Filtered traffic ──────────────────────────────────────────────────────
+theme.section(
+    "Filtered traffic",
+    "Connections dropped by IGNORE_UNFORWARDED_CONNECTIONS — no proxy header, in "
+    "practice the platform's own health checks. Kept out of the capture tables "
+    "above so they cannot pollute detection or scoring, but surfaced here so an "
+    "empty feed reads as 'genuinely quiet' rather than 'silently filtered'.",
 )
 
 filtered = bridge_run(db.filtered_connection_stats())
-
-fcol1, fcol2, fcol3, fcol4 = st.columns(4)
-fcol1.metric("Filtered (total)", filtered["total"])
-fcol2.metric("Last hour", filtered["last_hour"])
-fcol3.metric("Last 24h", filtered["last_24h"])
-fcol4.metric(
-    "Most recent",
-    filtered["latest"].strftime("%H:%M:%S") if filtered["latest"] else "—",
-)
+theme.kpis([
+    {"label": "Filtered total", "value": filtered["total"], "note": "since deployment",
+     "tone": theme.MUTED},
+    {"label": "Last hour", "value": filtered["last_hour"], "note": "probes", "tone": theme.MUTED},
+    {"label": "Last 24h", "value": filtered["last_24h"], "note": "probes", "tone": theme.MUTED},
+    {"label": "Most recent", "note": "probe timestamp", "tone": theme.MUTED,
+     "value": filtered["latest"].strftime("%H:%M:%S") if filtered["latest"] else "—"},
+])
 
 if filtered["recent"]:
     with st.expander(f"Breakdown by source ({len(filtered['recent'])} shown)"):
         # st.dataframe never interprets cell contents as HTML/markdown, which
         # matters here: `path` and `method` come off the wire from whoever
         # connected, so they are attacker-controlled text.
-        st.dataframe(pd.DataFrame(filtered["recent"]), width='stretch')
+        st.dataframe(pd.DataFrame(filtered["recent"]), width="stretch", hide_index=True)
 elif filtered["total"] == 0:
-    st.info(
-        "Nothing filtered yet. If this stays at zero while the service is up, "
-        "the health check isn't reaching the honeypot at all — worth checking."
+    theme.empty_state(
+        "🛡️",
+        "Nothing filtered yet",
+        "If this stays at zero while the service is up, the platform health check "
+        "is not reaching the honeypot at all — worth investigating, because it "
+        "also means you have no independent liveness signal.",
     )
 
-st.markdown("---")
-st.subheader("Recent Alerts")
+# ── Alerts ────────────────────────────────────────────────────────────────
+theme.section("Recent alerts", "Detections raised by the brute-force and correlation engines.")
 
 alerts = bridge_run(db.list_alerts(limit=10))
 if alerts:
-    st.dataframe(pd.DataFrame(alerts), width='stretch')
+    st.dataframe(pd.DataFrame(alerts), width="stretch", hide_index=True)
 else:
-    st.info("No alerts yet.")
+    theme.empty_state(
+        "🔔",
+        "No alerts raised",
+        "Detectors fire on credential stuffing, brute-force thresholds and "
+        "multi-service probing. None has triggered — consistent with scanner "
+        "traffic that connects without attempting a login.",
+    )
 
 if auto_refresh:
     time.sleep(15)

@@ -1,5 +1,5 @@
 """
-Admin login for the HoneyShield v2 dashboard.
+Admin login and the shared page shell for the HoneyShield v2 dashboard.
 
 Single admin account, argon2-hashed, lockout after repeated failures
 (auth/async_admin_auth.py). Session state is Streamlit's own per-browser-
@@ -14,6 +14,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from auth.async_admin_auth import authenticate, bootstrap_admin_if_needed, DEFAULT_ADMIN_USERNAME
+from dashboard import theme
 from dashboard.async_bridge import run as bridge_run
 from database.db_async import db
 
@@ -50,31 +51,48 @@ def _ensure_bootstrapped():
 
 def show_login_page():
     _ensure_bootstrapped()
+    theme.inject(authenticated=False)
 
-    st.set_page_config(page_title="HoneyShield Login", page_icon="🔐", layout="centered")
-    st.title("🔐 HoneyShield Login")
-    st.caption("Single admin account. Default credentials are printed once to the server console on first run.")
+    # Narrow centre column: a full-width form on a 1500px canvas looks like an
+    # unfinished layout rather than a deliberate sign-in screen.
+    _, mid, _ = st.columns([1, 1.15, 1])
+    with mid:
+        st.markdown(
+            '<div class="hs-login-brand">'
+            '<div class="hs-logo">🍯</div>'
+            "<h1>HoneyShield</h1>"
+            '<div class="hs-tag">Honeypot intelligence console</div>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
-    with st.form("login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        submit = st.form_submit_button("Log In", width='stretch')
+        with st.form("login_form"):
+            username = st.text_input("Username", placeholder="admin")
+            password = st.text_input("Password", type="password", placeholder="••••••••••••")
+            submit = st.form_submit_button("Sign in", width="stretch", type="primary")
 
-    if submit:
-        if not username or not password:
-            st.error("Enter both username and password.")
-            return
+        if submit:
+            if not username or not password:
+                st.error("Enter both username and password.")
+                return
 
-        success = _run(authenticate(username, password))
+            success = _run(authenticate(username, password))
 
-        if success:
-            st.session_state["authenticated"] = True
-            st.session_state["username"] = username
-            st.rerun()
-        else:
-            # Deliberately generic — never echoes the submitted password, never
-            # distinguishes "wrong password" from "locked out" from "unknown user".
-            st.error("Invalid username or password.")
+            if success:
+                st.session_state["authenticated"] = True
+                st.session_state["username"] = username
+                st.rerun()
+            else:
+                # Deliberately generic — never echoes the submitted password, never
+                # distinguishes "wrong password" from "locked out" from "unknown user".
+                st.error("Invalid username or password.")
+
+        st.markdown(
+            '<div class="hs-login-note">Single admin account · argon2 · locks after 10 '
+            "failed attempts<br/>Bound to 127.0.0.1 — this console is never exposed "
+            "to the internet.</div>",
+            unsafe_allow_html=True,
+        )
 
 
 def check_authentication() -> bool:
@@ -88,8 +106,23 @@ def logout():
 
 
 def show_user_info():
-    if st.session_state.get("username"):
-        st.sidebar.markdown("---")
-        st.sidebar.markdown(f"**Logged in as:** {st.session_state['username']}")
-        if st.sidebar.button("Log Out", width='stretch'):
-            logout()
+    """Sidebar: brand, identity, navigation, sign-out."""
+    theme.sidebar_identity(st.session_state.get("username") or "unknown")
+    st.sidebar.markdown("<div style='height:.6rem'></div>", unsafe_allow_html=True)
+    if st.sidebar.button("Sign out", width="stretch"):
+        logout()
+
+
+def require_auth(page_icon: str, page_title: str) -> None:
+    """
+    Standard page preamble: gate, theme, sidebar.
+
+    Every page called the same four functions in the same order and drifted
+    over time; centralising it means a new page cannot forget the auth gate.
+    Call immediately after st.set_page_config().
+    """
+    if not check_authentication():
+        show_login_page()
+        st.stop()
+    theme.inject()
+    show_user_info()
