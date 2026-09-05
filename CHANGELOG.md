@@ -52,6 +52,13 @@ individual `PHASE1_COMPLETE.md`–`PHASE6_COMPLETE.md` status logs.
 - Added a pre-commit hook blocking key-shaped strings in staged commits, plus GitHub secret scanning and push protection as the non-bypassable server-side backstop
 - Pushed the full repository history to GitHub for the first time
 
+## 2026-08-22 — OTX enrichment restored in production
+- Created a **dedicated AlienVault OTX account** for this project, resolving the constraint that previously kept OTX out of production. OTX issues one key per account, so the old key was shared with unrelated projects and deploying it would have widened its blast radius past this honeypot — the only remedy OTX's model allows is a separate account, not a second key
+- `OTX_API_KEY` is now set in production, restoring pulse-match enrichment and the `otx_pulse_match` scoring factor (weight 15 of 100), which previously could never fire there
+- The old shared key was deliberately left in place on the original account rather than regenerated — regenerating would have silently invalidated it for every other project using it
+- Verified live before deploying, through the app's own `async_otx.py` client: `/user/me` authenticates, and pulse lookups returned real counts (50, 26 and 5) across three known-flagged IPs
+- Updated `docs/SECRETS.md` §2 and `docs/RENDER.md` §4, which both documented the exclusion; fixed two stale `docs/KOYEB.md` references in `.env` left over from the hosting pivot
+
 ## 2026-08-14 — Hosting Pivot: Koyeb → Render
 - Discovered Koyeb's free Starter tier closed to new signups following its acquisition by Mistral AI (Feb 2026); Koyeb's own docs now state a credit card is required for new-account verification, which fails the project's no-card constraint regardless of never being charged
 - Researched Render as the replacement against Render's own primary docs rather than aggregator summaries, learning directly from the Koyeb miss: confirmed no stated card requirement (one unverified conflicting report noted, not dismissed), 750 free instance-hours/month, TCP health checks by default (unlike Koyeb, which defaulted to HTTP and needed a manual override), and that Render does not auto-inject `$PORT` — the opposite of Koyeb, requiring it to be set explicitly

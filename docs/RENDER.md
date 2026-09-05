@@ -113,16 +113,32 @@ supports marking values as secret/hidden in the dashboard).
 | `ABUSEIPDB_API_KEY` | production key | Rotated, honeypot-only |
 | `GEMINI_API_KEY` | production key | Rotated, honeypot-only, live-verified |
 | `GEMINI_MODEL` | `gemini-flash-latest` | |
+| `OTX_API_KEY` | production key | On a **dedicated OTX account** created for this project — see below |
 
 `PYTHONIOENCODING=utf-8` is **not needed** on Render the way it was flagged for
 Koyeb — worth setting anyway as a harmless safeguard against the same non-ASCII
 banner crash under a piped/non-UTF-8 log context, but hasn't been confirmed as
 necessary here specifically.
 
-**`OTX_API_KEY` is deliberately left unset here**, same reasoning as the Koyeb
-plan: AlienVault OTX issues one account-wide key, shared with other projects, so
-deploying it anywhere third-party would widen its blast radius. See
-[docs/SECRETS.md](SECRETS.md).
+**`OTX_API_KEY` is now included** — reversing the earlier decision to omit it.
+
+The original exclusion was never about OTX being unimportant. It was that OTX
+issues exactly one API key per account, and the key in use was already shared with
+other, unrelated projects; putting it into a third-party platform's env store would
+have widened its blast radius well past this deployment.
+
+That specific problem is now gone. The key configured here belongs to a **separate
+AlienVault OTX account created solely for this project**, so it is project-scoped
+in the only way OTX permits — a dedicated account rather than a per-project key.
+A leak of this credential exposes this honeypot's OTX access and nothing else,
+which is the same containment property `ABUSEIPDB_API_KEY` and `GEMINI_API_KEY`
+already have.
+
+Including it restores OTX pulse-match enrichment in production, and with it the
+`otx_pulse_match` scoring factor (weight 15 of 100) that would otherwise never
+fire. Verified live against this key before deploying: `/user/me` authenticates,
+and pulse lookups return real counts (50, 26 and 5 pulses on three known-flagged
+IPs). See [docs/SECRETS.md](SECRETS.md) §2.
 
 ## 5. Deploy, then verify the forwarded header — this is the critical step
 

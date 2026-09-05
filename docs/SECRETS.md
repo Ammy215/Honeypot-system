@@ -29,14 +29,13 @@ git grep -aIE "(AIza[0-9A-Za-z_-]{20,}|sk-[A-Za-z0-9]{20,}|[a-f0-9]{80})" $(git 
 ## 2. Separate production and development keys
 
 Generate a **second, independent key for each service** and use it only in
-production. Never share one key across both — except OTX, which structurally can't
-do this (see below).
+production. Never share one key across both.
 
 | Service | Dev | Production | Status |
 |---|---|---|---|
 | AbuseIPDB | old key retired | new key | ✅ rotated 2026-08-13, verified |
 | Google Gemini | old key retired | new key | ✅ rotated 2026-08-13, live-verified (`finish_reason: STOP`) |
-| AlienVault OTX | one shared key | — | ⚠️ can't be separated — see below |
+| AlienVault OTX | old shared key | key on a dedicated OTX account | ✅ separated 2026-08-22, live-verified (real pulse counts returned) |
 
 Why it's worth doing for AbuseIPDB and Gemini:
 
@@ -51,30 +50,41 @@ Why it's worth doing for AbuseIPDB and Gemini:
 unprotected on disk before this project's hardening pass. It never appeared in git,
 but "not in git" isn't the same as "never exposed," and rotation is cheap.
 
-### OTX is a structural exception, not an oversight
+### OTX needed a whole account, not a second key — resolved 2026-08-22
 
-AlienVault OTX issues **exactly one API key per account** — there's no way to
-generate a second, project-scoped key the way AbuseIPDB and Gemini allow. The
-existing key is already shared with other, unrelated projects on this account.
+AlienVault OTX issues **exactly one API key per account**. There is no way to mint
+a second, project-scoped key the way AbuseIPDB and Gemini allow, so for most of
+this project's life the OTX key in use was one shared with other, unrelated
+projects on the same account.
 
-Given that, **the decision made here is to keep it dev-only and never deploy it to
-the hosting platform.** Putting a cross-project credential into a third-party
-platform's env store would widen its blast radius past this deployment — a
-platform-side compromise would then expose whatever else that key protects, not
-just this honeypot. This reasoning is independent of which specific platform is
-used (Koyeb, then Render after Koyeb's free tier closed to new signups) — it
-follows from OTX's one-key-per-account limitation, not from anything
-platform-specific.
+**That is why OTX was originally excluded from production**, and the reasoning was
+specifically about blast radius, not about OTX being unimportant: putting a
+cross-project credential into a third-party platform's env store would mean a
+platform-side compromise exposed whatever *else* that key protected, not just this
+honeypot.
 
-The app degrades cleanly without it: `_has_api_key()` in
-`honeypot/intelligence/async_otx.py` gates every OTX call, tested since Phase 3. In
-production, OTX pulse-match enrichment (one of 14 scoring factors, weight 15/100)
-simply doesn't populate — nothing crashes, nothing else is affected. See
-`docs/RENDER.md`'s environment variable table.
+**Resolved by creating a separate OTX account dedicated to this project.** That is
+the only remedy OTX's model permits — an entirely new account, not a setting
+change. The production key now belongs to that dedicated account, giving it the
+same containment property AbuseIPDB and Gemini already had: a leak exposes this
+honeypot's OTX access and nothing more. The old shared key was left untouched on
+the original account, so nothing else broke — worth noting, because *regenerating*
+the shared key instead would have silently invalidated it for every other project
+using it.
 
-If OTX enrichment in production ever becomes a priority, the only way to get a
-project-scoped key is a **separate AlienVault OTX account** dedicated to this
-project — not a setting change, an entirely new account.
+Consequences of the change:
+
+- `OTX_API_KEY` is now set in production (see `docs/RENDER.md` §4).
+- OTX pulse-match enrichment populates in production again, and with it the
+  `otx_pulse_match` scoring factor — weight 15 of 100 — which previously could
+  never fire there.
+- Verified live before deploying: `/user/me` authenticates, and pulse lookups
+  return real data (50, 26 and 5 pulses across three known-flagged IPs), via the
+  app's own `honeypot/intelligence/async_otx.py` client.
+
+The graceful-degradation path still exists and is still tested — `_has_api_key()`
+gates every OTX call, so an absent or revoked key means pulse enrichment simply
+doesn't populate rather than anything crashing.
 
 ## 3. Confirm no billing is attached
 
