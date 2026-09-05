@@ -12,6 +12,7 @@ supplies the complete captured record for the IP and explicitly instructs
 the model to report gaps as gaps, never invent detail to fill them.
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Dict, Optional
@@ -60,6 +61,37 @@ def _describe(exc: Exception) -> str:
     """
     text = str(exc).strip()
     return text if text else f"{type(exc).__name__} (no further detail)"
+
+
+# Backoff schedule between attempts, in seconds. Three attempts, ~23s of
+# waiting worst case, which is short enough that an operator watching the
+# dashboard will wait it out rather than assume the page hung.
+RETRY_DELAYS = (2, 6, 15)
+
+# Substrings identifying conditions where the provider is telling us to come
+# back later. Matched against the exception text because google-genai raises
+# APIError for everything and the HTTP status is not consistently exposed as a
+# typed attribute across SDK versions.
+_TRANSIENT_MARKERS = (
+    "503", "UNAVAILABLE",           # model overloaded — the common one
+    "429", "RESOURCE_EXHAUSTED",    # rate limited
+    "500", "INTERNAL",              # provider-side fault
+    "504", "DEADLINE_EXCEEDED",     # upstream timeout
+    "Timeout", "ReadTimeout", "ConnectError", "RemoteProtocolError",
+)
+
+
+def _is_transient(exc: Exception) -> bool:
+    """
+    True when retrying could plausibly succeed.
+
+    Deliberately narrow. A bad API key, a safety block, or a malformed request
+    fails identically every time, so retrying those burns quota and delays the
+    error the operator actually needs to see. Only conditions the provider
+    itself describes as temporary are retried.
+    """
+    text = f"{type(exc).__name__} {exc}"
+    return any(marker in text for marker in _TRANSIENT_MARKERS)
 
 
 def is_available() -> bool:
@@ -176,41 +208,89 @@ async def generate_attacker_report(ip_address: str) -> Dict:
 
     context_text = _format_context(context)
 
-    try:
-        client = _get_client()
-        response = await client.aio.models.generate_content(
-            model=config.GEMINI_MODEL,
-            contents=context_text + "\n\nWrite the threat report now.",
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=0.2,
-                max_output_tokens=2000,
-                # This model's "thinking" tokens count against max_output_tokens, and
-                # were eating the whole budget before any report text came out
-                # (thoughts_token_count=572/600, response cut off at 24 tokens).
-                # thinking_budget=0 to disable it outright 400s on this model, so the
-                # fix is generous headroom instead — 2000 comfortably covers thinking
-                # plus an 800-ish-token report.
+    report_text = None
+    last_exc: Optional[Exception] = None
+    attempts_made = 0
+    waited = 0.0
+
+    # Retry only transient provider conditions. Gemini's free tier sheds load
+    # with 503 "high demand", which is explicitly a come-back-later signal —
+    # surfacing that straight to the operator turns a two-second wait into a
+    # failed report.
+    for attempt, delay in enumerate(RETRY_DELAYS, start=1):
+        attempts_made = attempt
+        try:
+            client = _get_client()
+            response = await client.aio.models.generate_content(
+                model=config.GEMINI_MODEL,
+                contents=context_text + "\n\nWrite the threat report now.",
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    temperature=0.2,
+                    max_output_tokens=2000,
+                    # This model's "thinking" tokens count against max_output_tokens,
+                    # and were eating the whole budget before any report text came out
+                    # (thoughts_token_count=572/600, response cut off at 24 tokens).
+                    # thinking_budget=0 to disable it outright 400s on this model, so
+                    # the fix is generous headroom instead — 2000 comfortably covers
+                    # thinking plus an 800-ish-token report.
+                ),
+            )
+            report_text = (response.text or "").strip()
+            if not report_text:
+                raise ValueError(
+                    "Gemini returned an empty response (possibly blocked by safety filters)"
+                )
+            break  # success
+
+        except Exception as e:
+            # Catches APIError (the SDK's wrapper for every HTTP fault) alongside
+            # transport-level failures like httpx timeouts, which never reach it.
+            last_exc = e
+            if not _is_transient(e):
+                # Permanent: a bad key, a safety block, a malformed request. Retrying
+                # cannot help and only delays the error the operator needs to see.
+                logger.error(
+                    f"Gemini error generating report for {ip_address} "
+                    f"(not retryable): {_describe(e)}"
+                )
+                return {
+                    "ip_address": ip_address,
+                    "report_text": f"AI report generation failed: {_describe(e)}",
+                    "generated_at": generated_at,
+                    "error": True,
+                }
+
+            if attempt < len(RETRY_DELAYS):
+                logger.warning(
+                    f"Gemini transient condition for {ip_address} on attempt "
+                    f"{attempt}/{len(RETRY_DELAYS)} ({_describe(e)}); "
+                    f"retrying in {delay}s"
+                )
+                await asyncio.sleep(delay)
+                waited += delay
+            else:
+                logger.error(
+                    f"Gemini still unavailable for {ip_address} after "
+                    f"{attempt} attempts over ~{waited:.0f}s: {_describe(e)}"
+                )
+
+    if report_text is None:
+        # Exhausted retries on a transient condition. The provider's raw payload
+        # ("503 UNAVAILABLE. {'error': {'code': 503, ...}}") is a debugging
+        # artifact, not an operator message — say what happened and what to do.
+        return {
+            "ip_address": ip_address,
+            "report_text": (
+                f"Gemini is busy — retried {attempts_made} times over ~{waited:.0f}s "
+                f"and it is still shedding load. This is a temporary capacity limit "
+                f"on Google's side, not a problem with your data or API key. "
+                f"Try again in a minute."
             ),
-        )
-        report_text = (response.text or "").strip()
-        if not report_text:
-            raise ValueError("Gemini returned an empty response (possibly blocked by safety filters)")
-    except APIError as e:
-        logger.error(f"Gemini API error generating report for {ip_address}: {_describe(e)}")
-        return {
-            "ip_address": ip_address,
-            "report_text": f"AI report generation failed: {_describe(e)}",
             "generated_at": generated_at,
             "error": True,
-        }
-    except Exception as e:
-        logger.error(f"Unexpected error generating AI report for {ip_address}: {_describe(e)}")
-        return {
-            "ip_address": ip_address,
-            "report_text": f"AI report generation failed: {_describe(e)}",
-            "generated_at": generated_at,
-            "error": True,
+            "transient": True,
+            "detail": _describe(last_exc) if last_exc else "",
         }
 
     await db.record_ai_report(ip_address, report_text)

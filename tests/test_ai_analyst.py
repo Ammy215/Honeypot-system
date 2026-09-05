@@ -100,25 +100,70 @@ def seed():
     sql("INSERT INTO connections (ip_address, service, port) VALUES (?, 'http', 8080)", (SPARSE_IP,))
 
 
-async def generate_with_retry(ip, attempts=4):
-    """Gemini returns transient 503 "high demand" errors. That is an API
-    condition, not a defect in this code — the error handling for it is verified
-    separately in 9c — so retry rather than let it fail the content checks."""
-    last = None
-    for i in range(attempts):
-        res = await analyst.generate_attacker_report(ip)
-        if not res.get("error"):
-            return res
-        last = res
-        msg = str(res.get("report_text", ""))
-        transient = any(t in msg for t in ("503", "UNAVAILABLE", "ReadTimeout",
-                                           "Timeout", "429", "RESOURCE_EXHAUSTED"))
-        if transient:
-            print(f"  ..  transient Gemini condition on attempt {i + 1} ({msg[:60]}); retrying")
-            await asyncio.sleep(15)
-            continue
-        return res
-    return last
+class FakeGeminiClient:
+    """
+    Stands in for genai.Client, replaying a scripted sequence of outcomes.
+
+    An entry that is an Exception is raised; anything else is returned as the
+    response object. Records how many calls were made, which is what lets these
+    tests assert on the PRODUCT's retry behaviour rather than performing the
+    retries themselves.
+    """
+
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.calls = 0
+        client = self
+
+        class _Models:
+            async def generate_content(self, **kwargs):
+                client.calls += 1
+                outcome = client.outcomes[min(client.calls - 1, len(client.outcomes) - 1)]
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return outcome
+
+        class _Aio:
+            models = _Models()
+
+        self.aio = _Aio()
+
+
+class FakeText:
+    """Minimal stand-in for a successful generate_content response."""
+
+    def __init__(self, text):
+        self.text = text
+
+
+def transient_error():
+    """A real APIError shaped like Gemini's 503 load-shedding response."""
+    from google.genai.errors import APIError
+
+    class _Resp:
+        body_segments = [{"error": {"code": 503, "message": "high demand",
+                                    "status": "UNAVAILABLE"}}]
+        headers = {}
+
+        def json(self):
+            return self.body_segments[0]
+
+    return APIError(503, _Resp())
+
+
+def permanent_error():
+    """A non-retryable error: a rejected API key looks like this."""
+    from google.genai.errors import APIError
+
+    class _Resp:
+        body_segments = [{"error": {"code": 400, "message": "API key not valid",
+                                    "status": "INVALID_ARGUMENT"}}]
+        headers = {}
+
+        def json(self):
+            return self.body_segments[0]
+
+    return APIError(400, _Resp())
 
 
 async def main():
@@ -129,6 +174,12 @@ async def main():
 
     # ── 9c. Error handling first (no live key needed) ──────────────────────
     section("9c. Error handling — API failure and missing key")
+
+    # These blocks now exercise the retry path, so shrink the backoff schedule
+    # to keep the suite fast. The number of attempts is unchanged — that is what
+    # the assertions below actually care about.
+    real_delays = analyst.RETRY_DELAYS
+    analyst.RETRY_DELAYS = (0.01, 0.01, 0.01)
 
     from google.genai.errors import APIError
 
@@ -151,16 +202,76 @@ async def main():
 
     # Regression: an exception carrying NO message (httpx.ReadTimeout is the real
     # one that occurred during pre-deployment testing) must not produce a bare
-    # "AI report generation failed: " with no cause.
+    # "AI report generation failed: " with no cause. A timeout is retryable, so
+    # the cause now lands in `detail` while report_text carries the operator
+    # message — the cause must still be somewhere, not swallowed.
     import httpx
     with patch.object(analyst, "_get_client") as mock_client:
         mock_client.side_effect = httpx.ReadTimeout("")
         res = await analyst.generate_attacker_report(RICH_IP)
         check("timeout failure returns error=True", res.get("error"), True)
+        surfaced = f"{res.get('report_text', '')} {res.get('detail', '')}"
+        check_true(f"message-less exception still names a cause (got: {surfaced!r})",
+                   surfaced.strip() not in ("AI report generation failed:", "AI report generation failed: ")
+                   and "ReadTimeout" in surfaced)
+
+    # ── 9c-bis. The PRODUCT retries transient conditions, not the test ────────
+    section("9c-bis. Retry behaviour lives in the product")
+
+    try:
+        # Classification is the load-bearing decision — assert it directly.
+        check_true("503/UNAVAILABLE classified transient",
+                   analyst._is_transient(transient_error()))
+        check_true("429/RESOURCE_EXHAUSTED classified transient",
+                   analyst._is_transient(Exception("429 RESOURCE_EXHAUSTED")))
+        check_true("httpx.ReadTimeout classified transient",
+                   analyst._is_transient(httpx.ReadTimeout("")))
+        check("invalid API key NOT classified transient",
+              analyst._is_transient(permanent_error()), False)
+        check("safety block NOT classified transient",
+              analyst._is_transient(ValueError("blocked by safety filters")), False)
+
+        # Two transient failures then success: the product must ride through it.
+        fake = FakeGeminiClient([transient_error(), transient_error(),
+                                 FakeText("Recovered report body, long enough to be real. " * 4)])
+        with patch.object(analyst, "_get_client", return_value=fake):
+            res = await analyst.generate_attacker_report(RICH_IP)
+        check("recovers after 2 transient failures", bool(res.get("error")), False)
+        check("made exactly 3 attempts", fake.calls, 3)
+        check_true("returned the recovered report", "Recovered report body" in res.get("report_text", ""))
+        # A recovered report is a real report: it must be persisted like any other.
+        check("recovered report IS written to ai_reports",
+              sql_count("SELECT COUNT(*) FROM ai_reports WHERE ip_address=?", (RICH_IP,)), 1)
+        # Clear it so the "nothing written on failure" assertions below measure
+        # their own effect rather than inheriting this row.
+        sql("DELETE FROM ai_reports WHERE ip_address=?", (RICH_IP,))
+
+        # Persistently unavailable: bounded attempts, readable message.
+        fake = FakeGeminiClient([transient_error()])
+        with patch.object(analyst, "_get_client", return_value=fake):
+            res = await analyst.generate_attacker_report(RICH_IP)
+        check("gives up after the full schedule", fake.calls, len(analyst.RETRY_DELAYS))
+        check("exhausted retries flagged transient", res.get("transient"), True)
         msg = res.get("report_text", "")
-        check_true(f"message-less exception still names a cause (got: {msg!r})",
-                   msg.strip() not in ("AI report generation failed:", "AI report generation failed: ")
-                   and "ReadTimeout" in msg)
+        check_true(f"message is human-readable, not a JSON dump (got: {msg[:60]!r})",
+                   "{'error'" not in msg and "'code'" not in msg)
+        check_true("message says it retried", "retried" in msg.lower())
+        check_true("message tells the operator what to do", "try again" in msg.lower())
+        check("nothing written to ai_reports when retries are exhausted",
+              sql_count("SELECT COUNT(*) FROM ai_reports WHERE ip_address=?", (RICH_IP,)), 0)
+
+        # Permanent failure: must NOT retry — retrying burns quota and delays
+        # the error the operator actually needs to see.
+        fake = FakeGeminiClient([permanent_error()])
+        with patch.object(analyst, "_get_client", return_value=fake):
+            res = await analyst.generate_attacker_report(RICH_IP)
+        check("permanent error attempted exactly once", fake.calls, 1)
+        check("permanent error returns error=True", res.get("error"), True)
+        check("permanent error not flagged transient", res.get("transient"), None)
+        check_true("permanent error surfaces the real cause",
+                   "API key not valid" in res.get("report_text", ""))
+    finally:
+        analyst.RETRY_DELAYS = real_delays
 
     real_key = config.GEMINI_API_KEY
     config.GEMINI_API_KEY = ""
@@ -180,7 +291,7 @@ async def main():
     # ── 9a. Rich attacker — every claim must trace to real data ────────────
     section("9a. Rich attacker — anti-hallucination, claim-by-claim")
 
-    res = await generate_with_retry(RICH_IP)
+    res = await analyst.generate_attacker_report(RICH_IP)
     if res.get("error"):
         check(f"live report generated (got error: {res.get('report_text')})", False, True)
         await db.close()
@@ -240,7 +351,7 @@ async def main():
     # ── 9b. Sparse attacker — gaps stated, not invented ────────────────────
     section("9b. Sparse attacker — must not invent detail to fill gaps")
 
-    res2 = await generate_with_retry(SPARSE_IP)
+    res2 = await analyst.generate_attacker_report(SPARSE_IP)
     if res2.get("error"):
         check(f"sparse report generated (got error: {res2.get('report_text')})", False, True)
         await db.close()
