@@ -8,7 +8,6 @@ contents as plain text and never interprets HTML or executes scripts —
 per HONEYSHIELD_PROJECT.md section 6 point 3.
 """
 
-import asyncio
 import sys
 from pathlib import Path
 
@@ -19,6 +18,7 @@ import plotly.graph_objects as go
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dashboard.login import check_authentication, show_login_page, show_user_info
+from dashboard.async_bridge import run as bridge_run
 from database.db_async import db
 
 st.set_page_config(page_title="Attacker Intel", page_icon="🌍", layout="wide")
@@ -32,7 +32,7 @@ show_user_info()
 st.title("🌍 Attacker Intelligence")
 
 search = st.text_input("Search by IP (substring match)")
-attackers = asyncio.run(db.list_attackers(limit=200, search_ip=search or None))
+attackers = bridge_run(db.list_attackers(limit=200, search_ip=search or None))
 
 st.subheader("Leaderboard")
 if attackers:
@@ -81,7 +81,7 @@ if selected_ip:
 
     st.markdown("#### Recent Login Attempts")
     st.caption("Rendered via st.dataframe — attacker-supplied text is never interpreted as HTML/markdown.")
-    login_attempts = asyncio.run(db.list_login_attempts_for_ip(selected_ip, limit=50))
+    login_attempts = bridge_run(db.list_login_attempts_for_ip(selected_ip, limit=50))
     if login_attempts:
         st.dataframe(pd.DataFrame(login_attempts), width='stretch')
     else:

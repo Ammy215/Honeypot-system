@@ -6,7 +6,6 @@ Single admin account, argon2-hashed, lockout after repeated failures
 session store — nothing is written to disk or exposed to the client.
 """
 
-import asyncio
 import sys
 from pathlib import Path
 
@@ -15,12 +14,19 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from auth.async_admin_auth import authenticate, bootstrap_admin_if_needed, DEFAULT_ADMIN_USERNAME
+from dashboard.async_bridge import run as bridge_run
 from database.db_async import db
 
 
 def _run(coro):
-    """Bridge async db/auth calls into Streamlit's sync script model."""
-    return asyncio.run(coro)
+    """
+    Bridge async db/auth calls into Streamlit's sync script model.
+
+    Delegates to dashboard/async_bridge.py, which runs everything on one
+    process-wide loop. This must never go back to asyncio.run(): the pool
+    created here at login would then be unusable from every later page.
+    """
+    return bridge_run(coro)
 
 
 def _ensure_bootstrapped():

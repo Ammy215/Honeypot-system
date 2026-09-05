@@ -19,6 +19,29 @@ import config
 logger = logging.getLogger("honeypot.database")
 
 
+async def _decode_inet_as_text(conn):
+    """
+    Return INET columns as plain strings instead of ipaddress objects.
+
+    asyncpg decodes INET into ipaddress.IPv4Address/IPv6Address. Both Plotly's
+    JSON encoder and pyarrow reject those types outright, so any dashboard page
+    that charted or tabulated an IP column crashed with "Object of type
+    IPv4Address is not JSON serializable" — while the SQLite backend, which
+    returns strings, worked fine. Normalising at the driver keeps both backends
+    returning the same Python types, rather than pushing str() calls into every
+    page and every query.
+
+    The trailing /32 (or /128) that Postgres prints for a host address is
+    stripped, since every IP stored here is a single host, never a subnet.
+    """
+    def _decode(value: str) -> str:
+        return value.split("/", 1)[0] if value.endswith(("/32", "/128")) else value
+
+    await conn.set_type_codec(
+        "inet", encoder=str, decoder=_decode, schema="pg_catalog", format="text"
+    )
+
+
 class AsyncDatabase:
     def __init__(self):
         self.backend = "postgres" if config.DATABASE_URL else "sqlite"
@@ -30,7 +53,18 @@ class AsyncDatabase:
             self._sqlite_path.parent.mkdir(parents=True, exist_ok=True)
 
     async def connect(self):
-        """Establish the backend connection (pool for Postgres; no-op for SQLite)."""
+        """
+        Establish the backend connection (pool for Postgres; no-op for SQLite).
+
+        Idempotent: calling it again with a live pool is a no-op. The dashboard
+        relies on this — dashboard/async_bridge.run() calls it before every
+        query so that landing directly on a page (bookmark, refresh, rerun)
+        works without the login script having run first. Without the guard,
+        each call would build another pool and orphan the previous one.
+        """
+        if self._pg_pool is not None:
+            return
+
         if self.backend == "postgres":
             import asyncpg
             # TLS is required explicitly, not left to negotiation. asyncpg
@@ -42,6 +76,7 @@ class AsyncDatabase:
             self._pg_pool = await asyncpg.create_pool(
                 config.DATABASE_URL,
                 ssl=config.DB_SSL_MODE,
+                init=_decode_inet_as_text,
             )
             logger.info(f"Connected to PostgreSQL (ssl={config.DB_SSL_MODE})")
         else:
@@ -50,6 +85,9 @@ class AsyncDatabase:
     async def close(self):
         if self._pg_pool:
             await self._pg_pool.close()
+            # Clear it so a later connect() rebuilds rather than handing back a
+            # closed pool — connect() is now idempotent on this field.
+            self._pg_pool = None
 
     async def init_schema(self):
         """
@@ -199,6 +237,82 @@ class AsyncDatabase:
             )
 
         await self._run_sqlite(_work)
+
+    async def filtered_connection_stats(self, recent_limit: int = 10) -> dict:
+        """
+        Summarise filtered (unforwarded) connections for the dashboard.
+
+        Read-only counterpart to record_filtered_connection above. Only the
+        dashboard role can run this — honeyshield_app holds INSERT and nothing
+        else — so the process exposed to attackers cannot read back or reason
+        about what got filtered.
+
+        Exists so "no attacks arrived" and "attacks arrived but were filtered
+        out" are distinguishable during a validation window. Without it both
+        look identical: an empty Live Feed.
+        """
+        empty = {"total": 0, "last_hour": 0, "last_24h": 0, "latest": None, "recent": []}
+
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT count(*) AS total,
+                           count(*) FILTER (WHERE filtered_at > now() - interval '1 hour')  AS last_hour,
+                           count(*) FILTER (WHERE filtered_at > now() - interval '24 hours') AS last_24h,
+                           max(filtered_at) AS latest
+                    FROM filtered_connections
+                    """
+                )
+                recent = await conn.fetch(
+                    """
+                    SELECT host(peer_ip) AS peer_ip, service, port, method, path,
+                           count(*) AS hits, max(filtered_at) AS latest
+                    FROM filtered_connections
+                    GROUP BY 1, 2, 3, 4, 5
+                    ORDER BY hits DESC
+                    LIMIT $1
+                    """,
+                    recent_limit,
+                )
+            if not row:
+                return empty
+            return {**dict(row), "recent": [dict(r) for r in recent]}
+
+        def _work(conn: sqlite3.Connection):
+            # Without this, rows come back as plain tuples and the dict(row)
+            # calls below raise "cannot convert dictionary update sequence
+            # element #0 to a sequence" — _sqlite_conn() does not set it.
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT count(*) AS total,
+                       sum(CASE WHEN filtered_at > datetime('now', '-1 hour')  THEN 1 ELSE 0 END) AS last_hour,
+                       sum(CASE WHEN filtered_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS last_24h,
+                       max(filtered_at) AS latest
+                FROM filtered_connections
+                """
+            ).fetchone()
+            recent = conn.execute(
+                """
+                SELECT peer_ip, service, port, method, path,
+                       count(*) AS hits, max(filtered_at) AS latest
+                FROM filtered_connections
+                GROUP BY peer_ip, service, port, method, path
+                ORDER BY hits DESC
+                LIMIT ?
+                """,
+                (recent_limit,),
+            ).fetchall()
+            if row is None:
+                return empty
+            d = dict(row)
+            # SUM over zero rows yields NULL in SQLite, unlike COUNT FILTER.
+            d["last_hour"] = d["last_hour"] or 0
+            d["last_24h"] = d["last_24h"] or 0
+            return {**d, "recent": [dict(r) for r in recent]}
+
+        return await self._run_sqlite(_work)
 
     async def record_login_attempt(
         self, connection_id: int, ip_address: str, username: Optional[str], password: Optional[str]

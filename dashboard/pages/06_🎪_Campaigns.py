@@ -8,7 +8,6 @@ v2 schema (HONEYSHIELD_PROJECT.md section 4), so this is a live query,
 not an alert type.
 """
 
-import asyncio
 import sys
 from pathlib import Path
 
@@ -17,6 +16,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from dashboard.async_bridge import run as bridge_run
 from dashboard.login import check_authentication, show_login_page, show_user_info
 from honeypot.detectors.async_correlation import detect_asn_campaigns, get_campaign_members
 import config
@@ -35,7 +35,7 @@ col1, col2 = st.columns(2)
 window_hours = col1.slider("Time window (hours)", 1, 72, config.CAMPAIGN_WINDOW_SECONDS // 3600)
 min_attackers = col2.slider("Minimum attackers per ASN", 2, 10, config.CAMPAIGN_MIN_ATTACKERS)
 
-campaigns = asyncio.run(detect_asn_campaigns(window_seconds=window_hours * 3600, min_attackers=min_attackers))
+campaigns = bridge_run(detect_asn_campaigns(window_seconds=window_hours * 3600, min_attackers=min_attackers))
 
 if not campaigns:
     st.info(
@@ -64,6 +64,6 @@ else:
 
         st.caption(f"Active {campaign['campaign_start']} → {campaign['campaign_end']}")
 
-        members = asyncio.run(get_campaign_members(campaign["ip_addresses"]))
+        members = bridge_run(get_campaign_members(campaign["ip_addresses"]))
         if members:
             st.dataframe(pd.DataFrame(members), width='stretch')

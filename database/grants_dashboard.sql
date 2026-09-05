@@ -32,6 +32,13 @@
 --   alerts             SELECT, UPDATE          — list + acknowledge_alert
 --   ai_reports         SELECT, INSERT          — list + record_ai_report (AI Analyst page)
 --   service_stats      SELECT                  — service_breakdown
+--   filtered_connections SELECT                — Live Feed "filtered traffic"
+--                                                 counter. Read-only on purpose:
+--                                                 only honeyshield_app writes
+--                                                 here, and the dashboard must
+--                                                 never be able to alter or
+--                                                 erase the noise-vs-silence
+--                                                 evidence it exists to show.
 --   attacker_commands  (none)                  — never queried by any dashboard page
 --   ioc_matches        (none)                  — IOC matching isn't wired into
 --                                                 any current dashboard page
@@ -55,6 +62,7 @@ GRANT SELECT ON login_attempts TO honeyshield_dashboard;
 GRANT SELECT, UPDATE ON alerts TO honeyshield_dashboard;
 GRANT SELECT, INSERT ON ai_reports TO honeyshield_dashboard;
 GRANT SELECT ON service_stats TO honeyshield_dashboard;
+GRANT SELECT ON filtered_connections TO honeyshield_dashboard;
 -- No grant at all on attacker_commands or ioc_matches — see rationale above.
 
 -- ── 3. Sequences ────────────────────────────────────────────────────────
@@ -94,6 +102,14 @@ CREATE POLICY honeyshield_dashboard_insert ON ai_reports FOR INSERT TO honeyshie
 
 DROP POLICY IF EXISTS honeyshield_dashboard_select ON service_stats;
 CREATE POLICY honeyshield_dashboard_select ON service_stats FOR SELECT TO honeyshield_dashboard USING (current_user = 'honeyshield_dashboard');
+
+-- filtered_connections already carries an INSERT-only policy for
+-- honeyshield_app (rls_policies.sql). Adding a SELECT policy for this role
+-- leaves that untouched: the two roles end up with exactly one verb each,
+-- opposite ones, which is the intent — the writer cannot read, the reader
+-- cannot write.
+DROP POLICY IF EXISTS honeyshield_dashboard_select ON filtered_connections;
+CREATE POLICY honeyshield_dashboard_select ON filtered_connections FOR SELECT TO honeyshield_dashboard USING (current_user = 'honeyshield_dashboard');
 
 -- ── 5. Verify ─────────────────────────────────────────────────────────────
 SELECT table_name, privilege_type

@@ -16,7 +16,6 @@ IOC list matching still isn't built (no detector backs it) — this page's
 list membership.
 """
 
-import asyncio
 import sys
 from pathlib import Path
 
@@ -26,6 +25,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dashboard.login import check_authentication, show_login_page, show_user_info
+from dashboard.async_bridge import run as bridge_run
 from database.db_async import db
 from honeypot.detectors.async_correlation import detect_asn_campaigns
 
@@ -44,7 +44,7 @@ st.subheader("Search Captured Credentials")
 pattern = st.text_input("Username or password contains...", placeholder="e.g. admin")
 
 if pattern:
-    results = asyncio.run(db.search_login_attempts(pattern, limit=200))
+    results = bridge_run(db.search_login_attempts(pattern, limit=200))
     if results:
         st.dataframe(pd.DataFrame(results), width='stretch', height=400)
         st.caption(f"{len(results)} matching login attempt(s). Values shown exactly as captured — never executed or reinterpreted.")
@@ -57,7 +57,7 @@ st.markdown("---")
 st.subheader("Search Attacker IPs")
 ip_pattern = st.text_input("IP contains...", placeholder="e.g. 101.96")
 if ip_pattern:
-    attackers = asyncio.run(db.list_attackers(limit=200, search_ip=ip_pattern))
+    attackers = bridge_run(db.list_attackers(limit=200, search_ip=ip_pattern))
     if attackers:
         st.dataframe(pd.DataFrame(attackers), width='stretch')
     else:
@@ -67,7 +67,7 @@ st.markdown("---")
 st.subheader("Multi-Service Attackers (Correlation Engine)")
 st.caption("IPs that hit 2+ honeypot services within a short window — classic recon/scanning behavior.")
 
-all_alerts = asyncio.run(db.list_alerts(limit=500))
+all_alerts = bridge_run(db.list_alerts(limit=500))
 multi_service_alerts = [a for a in all_alerts if a["alert_type"] == "multi_service"]
 if multi_service_alerts:
     rows = []
@@ -79,7 +79,7 @@ else:
 
 st.markdown("---")
 st.subheader("ASN Campaigns (preview)")
-campaigns = asyncio.run(detect_asn_campaigns())
+campaigns = bridge_run(detect_asn_campaigns())
 if campaigns:
     st.dataframe(pd.DataFrame(campaigns)[["asn", "attacker_count", "campaign_start", "campaign_end", "severity"]],
                  width='stretch')

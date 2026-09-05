@@ -7,7 +7,6 @@ free-form attacker text — but are still rendered via st.dataframe/st.code
 rather than markdown interpolation, as a matter of consistent practice.
 """
 
-import asyncio
 import sys
 from pathlib import Path
 
@@ -17,6 +16,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dashboard.login import check_authentication, show_login_page, show_user_info
+from dashboard.async_bridge import run as bridge_run
 from database.db_async import db
 
 st.set_page_config(page_title="Alerts", page_icon="🚨", layout="wide")
@@ -36,7 +36,7 @@ ack_filter = col2.selectbox("Status", ["All", "Unacknowledged", "Acknowledged"])
 severity = None if severity_filter == "All" else severity_filter
 acknowledged = {"All": None, "Unacknowledged": False, "Acknowledged": True}[ack_filter]
 
-alerts = asyncio.run(db.list_alerts(limit=200, severity=severity, acknowledged=acknowledged))
+alerts = bridge_run(db.list_alerts(limit=200, severity=severity, acknowledged=acknowledged))
 
 if not alerts:
     st.info("No alerts match this filter.")
@@ -56,7 +56,7 @@ else:
                 if acked:
                     st.success("Acknowledged")
                 elif st.button("Acknowledge", key=f"ack_{alert['id']}"):
-                    asyncio.run(db.acknowledge_alert(alert["id"]))
+                    bridge_run(db.acknowledge_alert(alert["id"]))
                     st.rerun()
 
 st.markdown("---")

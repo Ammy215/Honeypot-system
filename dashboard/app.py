@@ -1,12 +1,13 @@
 """
 HoneyShield v2 dashboard — main entry point.
 
-Reads from the v2 async database (database/db_async.py) via a small
-asyncio.run() bridge, since Streamlit pages are plain synchronous scripts.
+Reads from the v2 async database (database/db_async.py) through
+dashboard/async_bridge.py, since Streamlit pages are plain synchronous
+scripts. That bridge owns one event loop for the process — see its module
+docstring for why per-call asyncio.run() was silently broken here.
 Bound to 127.0.0.1 only — see .streamlit/config.toml.
 """
 
-import asyncio
 import sys
 from pathlib import Path
 
@@ -15,6 +16,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dashboard.login import check_authentication, show_login_page, show_user_info
+from dashboard.async_bridge import run as bridge_run
 from database.db_async import db
 
 st.set_page_config(
@@ -47,7 +49,7 @@ with st.sidebar:
     st.markdown("---")
     st.caption("HoneyShield v2 — bound to 127.0.0.1")
 
-summary = asyncio.run(db.summary_counts())
+summary = bridge_run(db.summary_counts())
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Attackers", summary["total_attackers"])
