@@ -107,9 +107,9 @@ supports marking values as secret/hidden in the dashboard).
 | `SKIP_SCHEMA_INIT` | `true` | The app role can't run `CREATE TABLE` |
 | `ENABLED_SERVICES` | `HTTP` | Free PaaS routes HTTP only |
 | `TRUST_PROXY_HEADERS` | `true` | Without this every attacker records as Render's edge |
-| `TRUSTED_PROXY_HOPS` | `2` (starting value — **see §5, this needs live confirmation**) | Anecdotal evidence (a Render community thread, not official docs) suggests Render's proxy chain appends twice — an edge layer, then an internal reverse proxy — unlike Koyeb's single hop. If §5 shows the real IP one position further left than expected, this is why |
+| `TRUSTED_PROXY_HOPS` | `3` — **confirmed live 2026-09-05**, not a guess | The pre-deployment guess of `2` was wrong. §5 against the real service showed a three-segment chain: `client, Cloudflare edge, Render internal LB` (Render fronts with Cloudflare — `Server: cloudflare` and `CF-RAY` are on every response). At `2` both plain and spoofed requests resolved to the Cloudflare edge IP — the safe direction, never the attacker's forged value, but useless data that collapsed every attacker onto one address. Confirmed correct at `3` across two controlled requests and multiple organic hits |
 | `FORWARDED_IP_HEADER` | `x-forwarded-for` | Render's reverse proxy appends to this without stripping attacker-supplied values first — confirmed via Render's own community forum, consistent with our anti-spoofing design |
-| `IGNORE_UNFORWARDED_CONNECTIONS` | `false` | **Leave false until §5 passes.** Filtered connections aren't dropped silently — they're logged to a separate `filtered_connections` table, not `attackers`/`connections`, so filtered traffic stays visible and distinguishable from genuinely low traffic during §7 |
+| `IGNORE_UNFORWARDED_CONNECTIONS` | `true` — set 2026-09-05, **only after §5 passed** | Start at `false` on a fresh deployment and keep it there until §5 confirms the hop count; flipping early hides the very traffic you need to diagnose it. Once live it diverted ~14 health-check probes/minute that were otherwise being recorded as a real attacker. Filtered connections aren't dropped silently — they go to `filtered_connections`, not `attackers`/`connections`, so filtered traffic stays visible and distinguishable from genuinely low traffic during §7 |
 | `ABUSEIPDB_API_KEY` | production key | Rotated, honeypot-only |
 | `GEMINI_API_KEY` | production key | Rotated, honeypot-only, live-verified |
 | `GEMINI_MODEL` | `gemini-flash-latest` | |
@@ -160,9 +160,16 @@ FROM connections ORDER BY connected_at DESC LIMIT 5;
 - `ip_address` must be **your own public IP**.
 - `forwarded_for_raw` must be populated, and — check this carefully — count how
   many comma-separated entries it has. If `ip_address` is NOT your real IP:
-  - If it looks like it landed on the *second-to-last* entry when it should be
-    last (or vice versa), adjust `TRUSTED_PROXY_HOPS` between `1` and `2` and
-    redeploy, then re-test.
+  - The resolved entry is counted from the **right**, so the index is
+    `len(entries) - TRUSTED_PROXY_HOPS`. On this deployment the chain is
+    `client, Cloudflare edge, Render internal LB` — three entries, so `3`
+    selects the leftmost, which is the real client. If the stored IP is one
+    position off, adjust `TRUSTED_PROXY_HOPS` (values of `1`–`3` are plausible
+    depending on how Render routes) and redeploy, then re-test.
+  - A spoofed request adds one entry on the left, making four; the same
+    `hops=3` then correctly selects the second entry — still the real client,
+    never the forged one. If a forged value is ever stored, the hop count is
+    too high: stop and fix it before trusting any captured data.
   - If `forwarded_for_raw` is `NULL` entirely, Render may use a different header
     name than `x-forwarded-for` — check the raw request some other way (e.g. a
     temporary debug log of all headers) and update `FORWARDED_IP_HEADER`.
@@ -178,6 +185,14 @@ inside `forwarded_for_raw`.
 
 **Do not flip `IGNORE_UNFORWARDED_CONNECTIONS` to `true` until this entire section
 passes with the correct hop count confirmed.**
+
+> **Outcome on this deployment (2026-09-05).** §5 initially *failed*: at
+> `TRUSTED_PROXY_HOPS=2` both the plain and the spoofed request resolved to the
+> Cloudflare edge, not the real client. Raising it to `3` and re-running gave the
+> real client IP in both cases, with the forged `1.2.3.4` present only inside
+> `forwarded_for_raw`. Any pre-fix rows are wrong data and were deleted rather
+> than kept — an attacker row holding a Cloudflare address is worse than no row,
+> because it looks legitimate.
 
 ## 6. Connect the local dashboard
 
@@ -241,9 +256,16 @@ sparse table here is the expected result, not a broken pipeline.
   normally prevent this, but a fully quiet week could pause the database.
 - **Only HTTP runs**, so `multi_service` detection and its scoring weight cannot
   fire.
-- **`TRUSTED_PROXY_HOPS` starts as a best guess (2), not a confirmed fact** —
-  unlike the Koyeb plan where the single-hop model was fairly confidently
-  correct. §5 must actually pass before trusting captured IPs at all.
+- **`TRUSTED_PROXY_HOPS` was a guess, and the guess was wrong.** The documented
+  starting value of `2` produced Cloudflare edge IPs, not attackers; `3` is the
+  confirmed-correct value (§4, §5). Kept here rather than quietly corrected,
+  because the lesson generalises: a hop count copied from a community thread is
+  a hypothesis, and §5 is what turns it into a fact. Re-run §5 after any change
+  to how Render fronts the service.
+- **Render's free tier sleeps after ~15 minutes idle.** Observed live: a ~16.6
+  minute gap in probes while asleep. Traffic arriving during sleep triggers a
+  cold start (~1 min) and the very first request may be lost, so a quiet stretch
+  in the data is not automatically evidence of no attacker activity.
 
 ## Deferred until after §7 succeeds
 
