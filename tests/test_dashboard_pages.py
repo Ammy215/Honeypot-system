@@ -167,7 +167,7 @@ def test_pages_render():
 # Match the rendered elements, not the stylesheet: the injected CSS names
 # every class, so a substring check against class names alone always matches.
 HEADER_DIV = '<div class="hs-header">'
-LOGIN_DIV = '<div class="hs-login-brand">'
+LOGIN_DIV = '<div class="hs-auth">'
 
 
 def _markup(at) -> str:

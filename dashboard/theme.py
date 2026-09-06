@@ -173,16 +173,111 @@ p, li, label, .stMarkdown {{ color: var(--text); }}
 /* Streamlit's stock alert boxes, toned to the palette. */
 [data-testid="stAlert"] {{ border-radius: 10px; border: 1px solid var(--border); background: var(--surface); }}
 
+/* ── Ambient background ───────────────────────────────────────────────── */
+/* Flat #000 reads as "unstyled", not "dark". Two very low-opacity radial
+   washes give the ground depth, and a fine grid at ~2% opacity gives the eye
+   something to register scale against. All CSS — no images, nothing to load. */
+.stApp::before {{
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(900px 620px at 12% -8%, rgba(245,165,36,.09), transparent 62%),
+    radial-gradient(820px 560px at 92% 108%, rgba(74,158,255,.07), transparent 60%),
+    radial-gradient(1100px 720px at 50% 50%, rgba(255,255,255,.014), transparent 70%);
+}}
+.stApp::after {{
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,.021) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.021) 1px, transparent 1px);
+  background-size: 46px 46px;
+  mask-image: radial-gradient(circle at 50% 40%, #000 20%, transparent 78%);
+  -webkit-mask-image: radial-gradient(circle at 50% 40%, #000 20%, transparent 78%);
+}}
+.block-container, [data-testid="stSidebar"] {{ position: relative; z-index: 1; }}
+
 /* ── Login ────────────────────────────────────────────────────────────── */
-.hs-login-brand {{ text-align: center; margin: 3.5rem 0 1.6rem; animation: hs-rise .45s ease both; }}
-.hs-login-brand .hs-logo {{ font-size: 2.6rem; line-height: 1; margin-bottom: .7rem; }}
-.hs-login-brand h1 {{ margin: 0 !important; font-size: 1.75rem !important; letter-spacing: -.025em; }}
-.hs-login-brand .hs-tag {{ color: var(--muted); font-size: .88rem; margin-top: .45rem; }}
-.hs-login-note {{
-  text-align: center; color: var(--muted); font-size: .78rem; margin-top: 1.4rem; line-height: 1.6;
+.hs-auth {{ text-align: center; margin: 2.6rem 0 1.5rem; animation: hs-rise .5s cubic-bezier(.22,.61,.36,1) both; }}
+.hs-auth .hs-mark {{
+  width: 54px; height: 54px; margin: 0 auto .95rem; display: grid; place-items: center;
+  border-radius: 15px; background: linear-gradient(150deg, rgba(245,165,36,.19), rgba(245,165,36,.05));
+  border: 1px solid rgba(245,165,36,.34);
+  box-shadow: 0 0 0 6px rgba(245,165,36,.045), 0 14px 34px -14px rgba(245,165,36,.5);
+}}
+.hs-auth .hs-mark svg {{ display: block; }}
+.hs-auth h1 {{
+  margin: 0 !important; font-size: 1.62rem !important; font-weight: 650 !important;
+  letter-spacing: -.03em; color: var(--text);
+}}
+.hs-auth .hs-tag {{
+  color: var(--muted); font-size: .84rem; margin-top: .34rem; letter-spacing: .002em;
+}}
+
+/* The form element itself is the card — Streamlit widgets cannot be wrapped in
+   custom markup, so it is styled in place rather than nested inside a div. */
+[data-testid="stForm"] {{
+  background: rgba(19,26,39,.72);
+  -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+  border: 1px solid rgba(255,255,255,.075) !important;
+  border-radius: 16px !important; padding: 1.6rem 1.55rem 1.4rem !important;
+  box-shadow: 0 26px 60px -24px rgba(0,0,0,.85), 0 0 0 1px rgba(255,255,255,.014) inset;
+  position: relative; overflow: hidden;
+  animation: hs-rise .5s cubic-bezier(.22,.61,.36,1) .06s both;
+}}
+/* Hairline of brand colour along the card's top edge. */
+[data-testid="stForm"]::before {{
+  content: ''; position: absolute; top: 0; left: 12%; right: 12%; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(245,165,36,.55), transparent);
+}}
+[data-testid="stForm"] label {{
+  font-size: .74rem !important; font-weight: 600 !important; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--muted) !important;
+}}
+[data-testid="stForm"] .stTextInput input {{ padding: .62rem .8rem !important; font-size: .92rem !important; }}
+
+/* Streamlit prints "Press Enter to submit form" inside the focused field,
+   where it collides with the reveal-password button. */
+[data-testid="InputInstructions"], [data-testid="stWidgetInstructions"] {{ display: none !important; }}
+
+/* The reveal-password eye, toned down from Streamlit's default. */
+[data-testid="stForm"] button[title="Show password text"],
+[data-testid="stForm"] .stTextInput button {{
+  background: transparent !important; border: none !important; color: var(--muted) !important;
+}}
+[data-testid="stForm"] .stTextInput button:hover {{ color: var(--accent) !important; }}
+
+[data-testid="stForm"] .stButton > button,
+[data-testid="stForm"] button[kind="primaryFormSubmit"],
+[data-testid="stForm"] button[kind="secondaryFormSubmit"] {{
+  margin-top: .5rem; border-radius: 9px; font-weight: 600; font-size: .9rem;
+  padding: .58rem 1rem; letter-spacing: .01em;
+  background: linear-gradient(180deg, #F7B23E, #E89312) !important;
+  border: 1px solid rgba(245,165,36,.9) !important; color: #171104 !important;
+  box-shadow: 0 10px 26px -12px rgba(245,165,36,.7);
+  transition: transform .14s ease, box-shadow .14s ease, filter .14s ease;
+}}
+[data-testid="stForm"] button[kind="primaryFormSubmit"]:hover {{
+  filter: brightness(1.05); transform: translateY(-1px);
+  box-shadow: 0 14px 30px -12px rgba(245,165,36,.8);
+}}
+[data-testid="stForm"] button[kind="primaryFormSubmit"]:active {{ transform: translateY(0); }}
+
+.hs-auth-foot {{
+  text-align: center; color: #5F6B82; font-size: .74rem; margin-top: 1.15rem;
+  letter-spacing: .04em;
 }}
 </style>
 """
+
+# Inline so it needs no network fetch and inherits currentColor. A hex mark
+# reads as "shield" without the childishness of an emoji at 54px.
+LOGO_SVG = (
+    '<svg width="26" height="28" viewBox="0 0 26 28" fill="none" '
+    'xmlns="http://www.w3.org/2000/svg" aria-hidden="true">'
+    '<path d="M13 1.6 24 7.6v12.8L13 26.4 2 20.4V7.6z" stroke="#F5A524" '
+    'stroke-width="1.7" stroke-linejoin="round" fill="rgba(245,165,36,.10)"/>'
+    '<path d="M13 8.2 18.6 11.4v6.2L13 20.8 7.4 17.6v-6.2z" fill="#F5A524" '
+    'fill-opacity=".92"/></svg>'
+)
 
 
 def inject(authenticated: bool = True) -> None:
@@ -202,6 +297,23 @@ def inject(authenticated: bool = True) -> None:
             "{display:none !important;}</style>",
             unsafe_allow_html=True,
         )
+
+
+def auth_brand(title: str, tagline: str) -> None:
+    """
+    Brand block for the sign-in screen.
+
+    Lives here rather than in login.py because composing the logo SVG into
+    markup requires interpolation, and only this module is permitted to
+    interpolate into a raw-HTML sink (see the security note at the top, and the
+    check in tests/test_dashboard_security.py). Arguments are escaped.
+    """
+    st.markdown(
+        f'<div class="hs-auth"><div class="hs-mark">{LOGO_SVG}</div>'
+        f"<h1>{esc(title)}</h1>"
+        f'<div class="hs-tag">{esc(tagline)}</div></div>',
+        unsafe_allow_html=True,
+    )
 
 
 def page_header(icon: str, title: str, subtitle: str = "", eyebrow: str = "") -> None:

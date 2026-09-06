@@ -55,20 +55,13 @@ def show_login_page():
 
     # Narrow centre column: a full-width form on a 1500px canvas looks like an
     # unfinished layout rather than a deliberate sign-in screen.
-    _, mid, _ = st.columns([1, 1.15, 1])
+    _, mid, _ = st.columns([1, 1.05, 1])
     with mid:
-        st.markdown(
-            '<div class="hs-login-brand">'
-            '<div class="hs-logo">🍯</div>'
-            "<h1>HoneyShield</h1>"
-            '<div class="hs-tag">Honeypot intelligence console</div>'
-            "</div>",
-            unsafe_allow_html=True,
-        )
+        theme.auth_brand("HoneyShield", "Sign in to the intelligence console")
 
-        with st.form("login_form"):
+        with st.form("login_form", border=False):
             username = st.text_input("Username", placeholder="admin")
-            password = st.text_input("Password", type="password", placeholder="••••••••••••")
+            password = st.text_input("Password", type="password", placeholder="Enter your password")
             submit = st.form_submit_button("Sign in", width="stretch", type="primary")
 
         if submit:
@@ -87,10 +80,12 @@ def show_login_page():
                 # distinguishes "wrong password" from "locked out" from "unknown user".
                 st.error("Invalid username or password.")
 
+        # Deliberately says nothing about the hashing algorithm, the lockout
+        # threshold, or how many accounts exist. The previous version listed all
+        # three, which handed an unauthenticated visitor a free description of
+        # the auth implementation — and read as debug output besides.
         st.markdown(
-            '<div class="hs-login-note">Single admin account · argon2 · locks after 10 '
-            "failed attempts<br/>Bound to 127.0.0.1 — this console is never exposed "
-            "to the internet.</div>",
+            '<div class="hs-auth-foot">AUTHORIZED ACCESS ONLY</div>',
             unsafe_allow_html=True,
         )
 
