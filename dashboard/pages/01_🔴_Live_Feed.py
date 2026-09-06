@@ -58,10 +58,23 @@ connections = bridge_run(db.list_recent_connections(limit=100, service=service))
 
 if connections:
     df = pd.DataFrame(connections)
-    order = [c for c in ("connected_at", "ip_address", "country", "service", "port",
-                         "threat_score", "verdict", "id") if c in df.columns]
+    order = [c for c in ("connected_at", "ip_address", "country", "method", "path",
+                         "user_agent", "service", "port", "threat_score", "verdict", "id")
+             if c in df.columns]
+    # method/path/user_agent are attacker-controlled. st.dataframe renders cell
+    # contents as inert text, which is why they appear here and never in a
+    # markdown or HTML sink.
     st.dataframe(df[order], width="stretch", height=430, hide_index=True)
-    st.caption(f"Showing {len(df)} most recent connection(s).")
+    st.caption(f"Showing {len(df)} most recent connection(s). `method`, `path` and "
+               "`user_agent` are recorded verbatim from the request — they show what "
+               "was probed for, not just that someone connected.")
+
+    probed = df[df["path"].notna()] if "path" in df.columns else df.iloc[0:0]
+    if not probed.empty:
+        st.markdown("##### Most-probed paths")
+        counts = (probed.groupby("path").size().reset_index(name="hits")
+                  .sort_values("hits", ascending=False).head(15))
+        st.dataframe(counts, width="stretch", hide_index=True)
 elif service:
     theme.empty_state(
         "🔍",

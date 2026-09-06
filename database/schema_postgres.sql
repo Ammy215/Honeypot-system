@@ -35,11 +35,27 @@ CREATE TABLE IF NOT EXISTS connections (
     -- balancer. ip_address above holds the *resolved* client. Kept because a
     -- spoofed X-Forwarded-For is itself attacker intel: it shows an attempt to
     -- forge a source IP. Inert text, never parsed for trust decisions.
-    forwarded_for_raw TEXT
+    forwarded_for_raw TEXT,
+    -- What the attacker actually asked for. Without these, a capture records
+    -- only that someone connected — which cannot distinguish a scanner
+    -- fingerprinting the host from one hunting for exposed `.env` files or a
+    -- known CMS exploit path. All three are attacker-controlled and stored
+    -- verbatim as inert text; they are truncated on write (see
+    -- honeypot/services/http_honeypot.py) so a hostile client cannot use them
+    -- as an unbounded write primitive. NULL means no request data arrived at
+    -- all — a bare TCP probe — which is itself a meaningful distinction.
+    method     TEXT,
+    path       TEXT,
+    user_agent TEXT
 );
 
--- Migration for databases created before forwarded_for_raw existed.
+-- Migrations for databases created before these columns existed. Additive and
+-- nullable, so existing rows stay valid and older code that never selects them
+-- keeps working unchanged.
 ALTER TABLE connections ADD COLUMN IF NOT EXISTS forwarded_for_raw TEXT;
+ALTER TABLE connections ADD COLUMN IF NOT EXISTS method TEXT;
+ALTER TABLE connections ADD COLUMN IF NOT EXISTS path TEXT;
+ALTER TABLE connections ADD COLUMN IF NOT EXISTS user_agent TEXT;
 
 CREATE TABLE IF NOT EXISTS login_attempts (
     id            BIGSERIAL PRIMARY KEY,

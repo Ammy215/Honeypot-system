@@ -36,7 +36,12 @@ CREATE TABLE IF NOT EXISTS connections (
     -- Raw proxy forwarding header, verbatim (see schema_postgres.sql).
     -- SQLite has no ADD COLUMN IF NOT EXISTS, so pre-existing dev databases
     -- are migrated by _migrate_sqlite() in database/db_async.py instead.
-    forwarded_for_raw TEXT
+    forwarded_for_raw TEXT,
+    -- Attacker-controlled request details; see schema_postgres.sql for the
+    -- rationale. Truncated on write, NULL when no request data arrived.
+    method     TEXT,
+    path       TEXT,
+    user_agent TEXT
 );
 
 CREATE TABLE IF NOT EXISTS login_attempts (

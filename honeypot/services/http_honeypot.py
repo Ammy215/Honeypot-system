@@ -20,6 +20,18 @@ from honeypot.intelligence.async_enrichment import enrich_and_score
 
 SERVER_HEADER = "Apache/2.4.41 (Ubuntu)"
 
+# Caps for the attacker-controlled request details stored on each connection.
+# recv_safe already bounds the read at 8192 bytes, so these are not the only
+# limit — but without them a client could fill the column with 8KB of padding
+# on every request and use the capture table as a cheap write amplifier. The
+# values are generous against real traffic: normal paths and User-Agent strings
+# sit far below them, so nothing legitimate is lost, while a deliberately
+# oversized value is still recorded (truncated) rather than dropped, because
+# the attempt itself is intel.
+MAX_METHOD_LEN = 16
+MAX_PATH_LEN = 2048
+MAX_USER_AGENT_LEN = 512
+
 
 class HTTPHoneypot(AsyncHoneypotService):
     """Fake HTTP service honeypot — simulates admin panels"""
@@ -83,8 +95,18 @@ class HTTPHoneypot(AsyncHoneypotService):
         else:
             self.logger.info(f"HTTP connection from {ip_address}:{address[1]}")
 
+        # Parse the request line here, before the connection row is written, so
+        # what was actually asked for is stored on the row itself. Recording only
+        # that someone connected cannot distinguish a scanner fingerprinting the
+        # host from one hunting for an exposed `.env` or a known CMS exploit
+        # path — and that distinction is most of the intel value.
+        req_method, req_path = self._request_line(request_data)
+        req_user_agent = self._clip(headers.get("user-agent"), MAX_USER_AGENT_LEN)
+
         connection_id = await db.record_connection(
-            ip_address=ip_address, service="http", port=self.port, forwarded_for_raw=forwarded_raw
+            ip_address=ip_address, service="http", port=self.port,
+            forwarded_for_raw=forwarded_raw,
+            method=req_method, path=req_path, user_agent=req_user_agent,
         )
         self.spawn_background(enrich_and_score(ip_address))
         await check_connection_patterns(ip_address)
@@ -95,14 +117,15 @@ class HTTPHoneypot(AsyncHoneypotService):
 
         self.logger.debug(f"HTTP request from {ip_address}: {request_data[:200]!r}")
 
-        lines = request_data.split("\n")
-        parts = lines[0].strip().split() if lines else []
-        if len(parts) < 2:
+        # Reuse the values already parsed for the connection row rather than
+        # parsing a second time — two parsers on the same untrusted input is how
+        # they drift apart, and the stored row would stop matching the routing.
+        if req_method is None or req_path is None:
             self._log_closed(ip_address, start_time, "malformed request")
             return
 
-        method, path = parts[0].upper(), parts[1]
-        user_agent = headers.get("user-agent", "Unknown")
+        method, path = req_method, req_path
+        user_agent = req_user_agent or "Unknown"
         self.logger.info(f"HTTP {method} {path} from {ip_address} | UA: {user_agent}")
 
         if path.startswith("/admin"):
@@ -159,6 +182,31 @@ class HTTPHoneypot(AsyncHoneypotService):
             "\r\n"
         ).encode("utf-8") + body
         await self.send_safe(writer, response)
+
+    @staticmethod
+    def _clip(value: Optional[str], limit: int) -> Optional[str]:
+        """Bound an attacker-controlled string. None stays None, so 'absent' and
+        'empty' remain distinguishable in the stored row."""
+        if value is None:
+            return None
+        value = value.strip()
+        return value[:limit] if value else None
+
+    @classmethod
+    def _request_line(cls, request_data: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Extract (method, path) from the request line, or (None, None).
+
+        None means no usable request line arrived — a bare TCP probe or a
+        malformed request — which is a meaningful distinction to preserve
+        rather than flatten into an empty string.
+        """
+        if not request_data:
+            return None, None
+        parts = request_data.split("\n", 1)[0].strip().split()
+        if len(parts) < 2:
+            return None, None
+        return cls._clip(parts[0].upper(), MAX_METHOD_LEN), cls._clip(parts[1], MAX_PATH_LEN)
 
     @staticmethod
     def _parse_headers(request_data: str) -> Dict[str, str]:

@@ -121,9 +121,10 @@ class AsyncDatabase:
         """
         def _work(conn: sqlite3.Connection):
             existing = {row[1] for row in conn.execute("PRAGMA table_info(connections)")}
-            if "forwarded_for_raw" not in existing:
-                conn.execute("ALTER TABLE connections ADD COLUMN forwarded_for_raw TEXT")
-                logger.info("Migrated SQLite dev DB: added connections.forwarded_for_raw")
+            for column in ("forwarded_for_raw", "method", "path", "user_agent"):
+                if column not in existing:
+                    conn.execute(f"ALTER TABLE connections ADD COLUMN {column} TEXT")
+                    logger.info(f"Migrated SQLite dev DB: added connections.{column}")
 
         await self._run_sqlite(_work)
 
@@ -148,7 +149,14 @@ class AsyncDatabase:
         return await loop.run_in_executor(None, _work)
 
     async def record_connection(
-        self, ip_address: str, service: str, port: int, forwarded_for_raw: Optional[str] = None
+        self,
+        ip_address: str,
+        service: str,
+        port: int,
+        forwarded_for_raw: Optional[str] = None,
+        method: Optional[str] = None,
+        path: Optional[str] = None,
+        user_agent: Optional[str] = None,
     ) -> int:
         """
         Upsert the attacker row and insert a connections row. Returns the new connection id.
@@ -157,6 +165,12 @@ class AsyncDatabase:
         honeypot/core/client_ip.py). `forwarded_for_raw` stores the untouched
         proxy header alongside it as evidence — parameterized like every other
         attacker-controlled value, never interpolated.
+
+        `method`, `path` and `user_agent` record what was actually requested,
+        so a capture can distinguish a scanner fingerprinting the host from one
+        hunting a specific exploit path. All three are attacker-controlled,
+        default to None (non-HTTP services and bare TCP probes pass nothing),
+        and are truncated by the caller before they reach here.
         """
         if self.backend == "postgres":
             async with self._pg_pool.acquire() as conn:
@@ -173,11 +187,12 @@ class AsyncDatabase:
                     )
                     row = await conn.fetchrow(
                         """
-                        INSERT INTO connections (ip_address, service, port, forwarded_for_raw)
-                        VALUES ($1, $2, $3, $4)
+                        INSERT INTO connections
+                            (ip_address, service, port, forwarded_for_raw, method, path, user_agent)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7)
                         RETURNING id
                         """,
-                        ip_address, service, port, forwarded_for_raw,
+                        ip_address, service, port, forwarded_for_raw, method, path, user_agent,
                     )
                     return row["id"]
 
@@ -193,8 +208,10 @@ class AsyncDatabase:
                 (ip_address,),
             )
             cur = conn.execute(
-                "INSERT INTO connections (ip_address, service, port, forwarded_for_raw) VALUES (?, ?, ?, ?)",
-                (ip_address, service, port, forwarded_for_raw),
+                "INSERT INTO connections "
+                "(ip_address, service, port, forwarded_for_raw, method, path, user_agent) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (ip_address, service, port, forwarded_for_raw, method, path, user_agent),
             )
             return cur.lastrowid
 
@@ -772,6 +789,7 @@ class AsyncDatabase:
     async def list_recent_connections(self, limit: int = 100, service: Optional[str] = None) -> list:
         base = """
             SELECT c.id, c.ip_address, c.service, c.port, c.connected_at,
+                   c.method, c.path, c.user_agent,
                    a.country, a.threat_score, a.verdict
             FROM connections c
             LEFT JOIN attackers a ON a.ip_address = c.ip_address
