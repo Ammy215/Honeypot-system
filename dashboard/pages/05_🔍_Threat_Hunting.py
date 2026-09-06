@@ -34,7 +34,7 @@ st.set_page_config(page_title="HoneyShield — Threat Hunting", page_icon="🔍"
 require_auth("🔍", "Threat Hunting")
 
 theme.page_header(
-    "🔍",
+    "",
     "Threat Hunting",
     "Live Feed answers “what is happening?”. This page answers “has this specific "
     "thing ever happened?” — search everything captured so far, then pivot into the "
@@ -85,7 +85,7 @@ pattern = st.text_input("Username or password contains…", placeholder="e.g. ad
 if pattern:
     results = bridge_run(db.search_login_attempts(pattern, limit=200))
     if results:
-        st.dataframe(pd.DataFrame(results), width="stretch", height=380, hide_index=True)
+        theme.table(pd.DataFrame(results), height=380)
         st.caption(f"{len(results)} matching login attempt(s).")
     else:
         theme.empty_state("🕳️", "No matches",
@@ -113,7 +113,7 @@ if ip_pattern:
         adf = pd.DataFrame(attackers)
         cols = [c for c in ("ip_address", "country", "isp", "asn", "threat_score",
                             "verdict", "total_connections", "last_seen") if c in adf.columns]
-        st.dataframe(adf[cols], width="stretch", hide_index=True)
+        theme.table(adf[cols])
         st.caption(f"{len(attackers)} matching attacker(s).")
     else:
         theme.empty_state("🕳️", "No matching IPs", "No captured source address contains that string.")
@@ -128,11 +128,8 @@ theme.section(
 all_alerts = bridge_run(db.list_alerts(limit=500))
 multi_service_alerts = [a for a in all_alerts if a["alert_type"] == "multi_service"]
 if multi_service_alerts:
-    st.dataframe(
-        pd.DataFrame([{"ip_address": a["ip_address"], "created_at": a["created_at"],
-                       "evidence": a["evidence"]} for a in multi_service_alerts]),
-        width="stretch", hide_index=True,
-    )
+    theme.table(pd.DataFrame([{"ip_address": a["ip_address"], "created_at": a["created_at"],
+                       "evidence": a["evidence"]} for a in multi_service_alerts]))
 else:
     theme.empty_state(
         "🧭",
@@ -149,11 +146,8 @@ theme.section("ASN campaigns",
 
 campaigns = bridge_run(detect_asn_campaigns())
 if campaigns:
-    st.dataframe(
-        pd.DataFrame(campaigns)[["asn", "attacker_count", "campaign_start",
-                                 "campaign_end", "severity"]],
-        width="stretch", hide_index=True,
-    )
+    theme.table(pd.DataFrame(campaigns)[["asn", "attacker_count", "campaign_start",
+                                 "campaign_end", "severity"]])
     st.caption("Full member breakdown, with per-IP enrichment, is on the Campaigns page.")
 else:
     theme.empty_state(

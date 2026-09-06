@@ -24,7 +24,7 @@ st.set_page_config(page_title="HoneyShield — Attacker Intel", page_icon="🌍"
 require_auth("🌍", "Attacker Intel")
 
 theme.page_header(
-    "🌍",
+    "",
     "Attacker Intelligence",
     "Every captured source IP, enriched with geolocation, reputation and threat-feed "
     "data, then scored across 14 weighted factors.",
@@ -65,7 +65,7 @@ df = pd.DataFrame(attackers)
 cols = [c for c in ("ip_address", "country", "isp", "threat_score", "verdict",
                     "abuseipdb_score", "otx_pulse_count", "total_connections", "last_seen")
         if c in df.columns]
-st.dataframe(df[cols], width="stretch", height=300, hide_index=True)
+theme.table(df[cols], height=300)
 
 # ── Profile drill-down ────────────────────────────────────────────────────
 theme.section("Profile", "Full enrichment record and captured credential history for one IP.")
@@ -98,10 +98,7 @@ with left:
         "First seen": attacker.get("first_seen"),
         "Last seen": attacker.get("last_seen"),
     }
-    st.dataframe(
-        pd.DataFrame({"Field": list(origin), "Value": [str(v) for v in origin.values()]}),
-        width="stretch", hide_index=True,
-    )
+    theme.table(pd.DataFrame({"Field": list(origin), "Value": [str(v) for v in origin.values()]}))
 
 with right:
     st.markdown("##### Reputation")
@@ -137,7 +134,7 @@ theme.section("Captured credentials",
 
 login_attempts = bridge_run(db.list_login_attempts_for_ip(selected_ip, limit=50))
 if login_attempts:
-    st.dataframe(pd.DataFrame(login_attempts), width="stretch", hide_index=True)
+    theme.table(pd.DataFrame(login_attempts))
 else:
     theme.empty_state(
         "🔑",

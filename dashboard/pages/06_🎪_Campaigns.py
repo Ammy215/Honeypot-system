@@ -23,7 +23,7 @@ st.set_page_config(page_title="HoneyShield — Campaigns", page_icon="🎪", lay
 require_auth("🎪", "Campaigns")
 
 theme.page_header(
-    "🎪",
+    "",
     "Attack Campaigns",
     "Distinct IPs from one network acting inside a shared window. Individually they "
     "look like unrelated visitors; grouped by ASN they resolve into a single "
@@ -67,11 +67,8 @@ theme.kpis([
 ])
 
 theme.section("Detected campaigns", "One row per network showing coordinated activity.")
-st.dataframe(
-    pd.DataFrame(campaigns)[["asn", "attacker_count", "total_connections",
-                             "campaign_start", "campaign_end", "severity"]],
-    width="stretch", hide_index=True,
-)
+theme.table(pd.DataFrame(campaigns)[["asn", "attacker_count", "total_connections",
+                             "campaign_start", "campaign_end", "severity"]])
 
 # ── Detail ────────────────────────────────────────────────────────────────
 theme.section("Campaign detail", "Member IPs and their individual enrichment.")
@@ -97,7 +94,7 @@ if members:
     mdf = pd.DataFrame(members)
     cols = [c for c in ("ip_address", "country", "city", "isp", "threat_score",
                         "verdict", "total_connections", "last_seen") if c in mdf.columns]
-    st.dataframe(mdf[cols], width="stretch", hide_index=True)
+    theme.table(mdf[cols])
 else:
     theme.empty_state("👥", "No member detail available",
                       "The campaign was detected but member enrichment could not be loaded.")

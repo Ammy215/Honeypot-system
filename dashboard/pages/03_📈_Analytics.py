@@ -22,7 +22,7 @@ st.set_page_config(page_title="HoneyShield — Analytics", page_icon="📈", lay
 require_auth("📈", "Analytics")
 
 theme.page_header(
-    "📈",
+    "",
     "Analytics",
     "Volume, composition and severity of captured traffic over time.",
     eyebrow="Aggregates",

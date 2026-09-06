@@ -66,9 +66,60 @@ html, body, [class*="css"], .stApp {{
 }}
 .stApp {{ background: var(--bg); }}
 
-/* Streamlit chrome we never want in a local SOC console. */
-[data-testid="stToolbar"], [data-testid="stDecoration"],
-[data-testid="stStatusWidget"], #MainMenu, footer, header {{ display: none !important; }}
+/* Streamlit chrome we never want in a local SOC console.
+   Hide the individual toolbar ITEMS, never the toolbar or the header itself:
+   in Streamlit 1.58 the sidebar expand control is a child of stToolbar, which
+   is a child of stHeader, so hiding either ancestor removes the only way to
+   reopen a collapsed sidebar — a child of a display:none parent cannot be
+   revived by any rule on the child. Verified against the shipped bundle:
+   stHeader > stToolbar > … > stExpandSidebarButton. */
+[data-testid="stAppDeployButton"], [data-testid="stMainMenu"],
+[data-testid="stToolbarActions"], [data-testid="stStatusWidget"],
+[data-testid="stDecoration"], #MainMenu, footer {{ display: none !important; }}
+
+/* Toolbar stays in the DOM purely to carry the expand control. */
+[data-testid="stToolbar"] {{
+  background: transparent !important; box-shadow: none !important;
+  right: auto !important; left: 0; padding: 0 !important;
+}}
+
+header[data-testid="stHeader"] {{
+  background: transparent !important; height: 0 !important; min-height: 0 !important;
+  box-shadow: none !important; border: none !important;
+  /* overflow must stay visible: the expand control lives inside this header,
+     and a zero-height ancestor with hidden overflow would clip it away again. */
+  overflow: visible !important;
+}}
+
+/* The way back when the sidebar is collapsed. Streamlit has renamed this
+   control across versions, so every known id is targeted. */
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="stExpandSidebarButton"],
+[data-testid="collapsedControl"] {{
+  display: flex !important; visibility: visible !important; opacity: 1 !important;
+  position: fixed !important; top: 14px; left: 14px; z-index: 1000;
+  align-items: center; justify-content: center;
+  background: rgba(19,26,39,.92) !important;
+  border: 1px solid rgba(255,255,255,.11) !important; border-radius: 10px;
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  box-shadow: 0 8px 22px -10px rgba(0,0,0,.85);
+  transition: border-color .15s ease, background .15s ease;
+}}
+[data-testid="stSidebarCollapsedControl"]:hover,
+[data-testid="stExpandSidebarButton"]:hover,
+[data-testid="collapsedControl"]:hover {{
+  border-color: rgba(245,165,36,.5) !important; background: rgba(26,34,49,.95) !important;
+}}
+[data-testid="stSidebarCollapsedControl"] svg,
+[data-testid="stExpandSidebarButton"] svg,
+[data-testid="collapsedControl"] svg {{ fill: {ACCENT} !important; color: {ACCENT} !important; }}
+
+/* The matching collapse control inside the sidebar. */
+[data-testid="stSidebarCollapseButton"] button,
+[data-testid="stSidebarHeader"] button {{
+  color: var(--muted) !important; opacity: .8;
+}}
+[data-testid="stSidebarCollapseButton"] button:hover {{ color: var(--accent) !important; opacity: 1; }}
 
 /* Roomier canvas — the default top padding wastes a third of the fold. */
 .block-container {{ padding: 2.25rem 2.75rem 4rem !important; max-width: 1500px; }}
@@ -85,18 +136,68 @@ p, li, label, .stMarkdown {{ color: var(--text); }}
 
 /* ── Sidebar ──────────────────────────────────────────────────────────── */
 [data-testid="stSidebar"] {{
-  background: {SURFACE}; border-right: 1px solid var(--border);
+  background: linear-gradient(180deg, #10161F 0%, #0D131C 100%);
+  border-right: 1px solid rgba(255,255,255,.055);
+  box-shadow: 1px 0 0 rgba(0,0,0,.4);
 }}
-[data-testid="stSidebar"] .block-container {{ padding: 1.25rem 1rem !important; }}
+[data-testid="stSidebar"] .block-container {{ padding: 1.1rem .85rem !important; }}
+
+/* Streamlit renders its page nav ABOVE any content we add, which puts the
+   brand under the menu. Reordering the sidebar's flex column fixes that
+   without replacing the nav — its routing is the only one that resolves page
+   URLs reliably. */
+[data-testid="stSidebar"] > div:first-child {{ display: flex; flex-direction: column; }}
+[data-testid="stSidebarUserContent"], [data-testid="stSidebarContent"] {{ order: 2; }}
+[data-testid="stSidebarNav"] {{ order: 1; padding: 1.15rem .75rem .35rem !important; max-height: none; }}
+[data-testid="stSidebarNav"] > ul {{ padding: 0 !important; }}
+[data-testid="stSidebarNav"] li {{ margin: 1px 0 !important; list-style: none; }}
+[data-testid="stSidebarNav"] li a {{
+  border-radius: 9px; padding: .46rem .62rem !important; gap: .6rem;
+  color: #97A3B8 !important; font-size: .875rem !important; font-weight: 500 !important;
+  border: 1px solid transparent; transition: background .14s ease, color .14s ease, border-color .14s ease;
+}}
+[data-testid="stSidebarNav"] li a:hover {{
+  background: rgba(255,255,255,.045) !important; color: var(--text) !important;
+}}
+[data-testid="stSidebarNav"] li a[aria-current="page"] {{
+  background: linear-gradient(90deg, rgba(245,165,36,.15), rgba(245,165,36,.03)) !important;
+  border-color: rgba(245,165,36,.28); color: var(--text) !important; font-weight: 600 !important;
+}}
+[data-testid="stSidebarNav"] li a span {{ font-size: .875rem !important; }}
+/* The emoji in each page filename renders at icon size and reads as clip art. */
+[data-testid="stSidebarNav"] li a span:first-child {{
+  filter: grayscale(.35) opacity(.85); font-size: .82rem !important;
+}}
+[data-testid="stSidebarNav"] li a[aria-current="page"] span:first-child {{ filter: none; }}
+
+/* Section label above the nav. */
+[data-testid="stSidebarNav"]::before {{
+  content: 'NAVIGATION'; display: block; font-size: .63rem; font-weight: 700;
+  letter-spacing: .16em; color: #5C6883; padding: 0 .62rem .5rem;
+}}
+
+/* Sidebar sign-out sits at the foot, quieter than a primary action. */
+[data-testid="stSidebar"] .stButton > button {{
+  background: transparent; border: 1px solid rgba(255,255,255,.09); color: #97A3B8;
+  font-weight: 500; font-size: .82rem; padding: .42rem .8rem;
+}}
+[data-testid="stSidebar"] .stButton > button:hover {{
+  border-color: rgba(240,66,107,.45); color: #F0426B; background: rgba(240,66,107,.06);
+  transform: none;
+}}
 
 /* ── Page header ──────────────────────────────────────────────────────── */
-.hs-header {{ margin: 0 0 1.75rem; }}
+.hs-header {{ margin: 0 0 1.5rem; padding-bottom: 1.15rem; border-bottom: 1px solid rgba(255,255,255,.055); }}
 .hs-header .hs-eyebrow {{
-  font-size: .7rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase;
-  color: var(--accent); margin-bottom: .4rem;
+  display: inline-flex; align-items: center; gap: .45rem;
+  font-size: .66rem; font-weight: 700; letter-spacing: .15em; text-transform: uppercase;
+  color: var(--accent); margin-bottom: .5rem;
 }}
-.hs-header h1 {{ margin: 0 0 .3rem !important; font-size: 1.9rem !important; }}
-.hs-header .hs-sub {{ color: var(--muted); font-size: .93rem; max-width: 68ch; line-height: 1.55; }}
+.hs-header .hs-eyebrow::before {{
+  content: ''; width: 14px; height: 2px; border-radius: 2px; background: var(--accent);
+}}
+.hs-header h1 {{ margin: 0 0 .34rem !important; font-size: 1.72rem !important; font-weight: 650 !important; }}
+.hs-header .hs-sub {{ color: var(--muted); font-size: .875rem; max-width: 82ch; line-height: 1.6; }}
 
 /* ── KPI cards ────────────────────────────────────────────────────────── */
 .hs-kpis {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: .9rem; margin-bottom: 1.6rem; }}
@@ -127,10 +228,25 @@ p, li, label, .stMarkdown {{ color: var(--text); }}
 @keyframes hs-rise {{ from {{ opacity: 0; transform: translateY(8px); }} to {{ opacity: 1; transform: none; }} }}
 
 /* ── Section heading ──────────────────────────────────────────────────── */
-.hs-section {{ margin: 2.1rem 0 .9rem; }}
-.hs-section h2 {{ margin: 0 !important; display: flex; align-items: center; gap: .55rem; }}
-.hs-section .hs-s-sub {{ color: var(--muted); font-size: .85rem; margin-top: .3rem; line-height: 1.5; max-width: 74ch; }}
-.hs-rule {{ height: 1px; background: var(--border); border: 0; margin: 2.1rem 0 0; }}
+/* Tightened from the first pass: 2.1rem of margin plus a rule plus Streamlit's
+   own element gap produced dead bands of empty screen between every block. */
+.hs-section {{ margin: 1.45rem 0 .75rem; }}
+.hs-section h2 {{
+  margin: 0 !important; font-size: 1.02rem !important; font-weight: 650 !important;
+  letter-spacing: -.01em; display: flex; align-items: center; gap: .5rem;
+}}
+.hs-section h2::before {{
+  content: ''; width: 3px; height: 15px; border-radius: 2px;
+  background: var(--accent); opacity: .8;
+}}
+.hs-section .hs-s-sub {{
+  color: var(--muted); font-size: .82rem; margin: .3rem 0 0 .8rem;
+  line-height: 1.55; max-width: 84ch;
+}}
+.hs-rule {{
+  height: 1px; border: 0; margin: 1.5rem 0 0;
+  background: linear-gradient(90deg, rgba(255,255,255,.075), rgba(255,255,255,.012) 65%, transparent);
+}}
 
 /* ── Empty state ──────────────────────────────────────────────────────── */
 .hs-empty {{
@@ -149,8 +265,39 @@ p, li, label, .stMarkdown {{ color: var(--text); }}
 }}
 
 /* ── Data tables ──────────────────────────────────────────────────────── */
-[data-testid="stDataFrame"] {{ border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }}
-[data-testid="stDataFrame"] * {{ font-family: 'JetBrains Mono', ui-monospace, monospace !important; font-size: .82rem !important; }}
+[data-testid="stDataFrame"] {{
+  border: 1px solid rgba(255,255,255,.07); border-radius: 12px; overflow: hidden;
+  background: rgba(19,26,39,.5);
+  box-shadow: 0 14px 34px -22px rgba(0,0,0,.9);
+}}
+/* Monospace for the cells only — headers stay in the UI face so they read as
+   labels rather than data. */
+[data-testid="stDataFrame"] [role="gridcell"] {{
+  font-family: 'JetBrains Mono', ui-monospace, monospace !important;
+  font-size: .8rem !important;
+}}
+[data-testid="stDataFrame"] [role="columnheader"] {{
+  font-family: 'Inter', sans-serif !important; font-size: .7rem !important;
+  font-weight: 600 !important; letter-spacing: .07em; text-transform: uppercase;
+  color: #7C8AA3 !important; background: rgba(255,255,255,.022) !important;
+}}
+[data-testid="stDataFrame"] [role="row"]:hover [role="gridcell"] {{
+  background: rgba(255,255,255,.028) !important;
+}}
+
+/* ── KPI card polish ──────────────────────────────────────────────────── */
+.hs-kpi {{ transition: transform .16s ease, border-color .16s ease; }}
+.hs-kpi:hover {{ transform: translateY(-2px); border-color: rgba(255,255,255,.13); }}
+.hs-kpi .hs-k-value.hs-k-word {{ font-size: 1.3rem; letter-spacing: .02em; font-weight: 600; }}
+
+/* Inline status dot for word-valued KPIs (ONLINE / IDLE / STALE). */
+.hs-dot {{
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: currentColor; margin-right: .5rem; vertical-align: middle;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 22%, transparent);
+  animation: hs-pulse 2.4s ease-in-out infinite;
+}}
+@keyframes hs-pulse {{ 0%,100% {{ opacity: 1; }} 50% {{ opacity: .45; }} }}
 
 /* ── Inputs & buttons ─────────────────────────────────────────────────── */
 .stTextInput input, .stSelectbox div[data-baseweb="select"] > div, .stNumberInput input {{
@@ -339,10 +486,16 @@ def kpis(items: Sequence[dict]) -> None:
     for it in items:
         tone = it.get("tone", ACCENT)
         note = f'<div class="hs-k-note">{esc(it["note"])}</div>' if it.get("note") else ""
+        # A word-valued KPI (ONLINE, MEDIUM) set at the numeric size looks like
+        # a headline rather than a reading; it gets its own scale plus a live
+        # status dot in the tone colour.
+        word = not str(it["value"]).replace(",", "").replace("/", "").replace("%", "").isdigit()
+        dot = f'<span class="hs-dot" style="color:{esc(tone)}"></span>' if word and it.get("dot") else ""
+        value_class = "hs-k-value hs-k-word" if word else "hs-k-value"
         cards.append(
             f'<div class="hs-kpi" style="--tone:{esc(tone)}">'
             f'<div class="hs-k-label">{esc(it["label"])}</div>'
-            f'<div class="hs-k-value">{esc(it["value"])}</div>{note}</div>'
+            f'<div class="{value_class}">{dot}{esc(it["value"])}</div>{note}</div>'
         )
     st.markdown(f'<div class="hs-kpis">{"".join(cards)}</div>', unsafe_allow_html=True)
 
@@ -376,6 +529,87 @@ def empty_state(icon: str, title: str, body: str) -> None:
 
 def severity_tone(verdict: Optional[str]) -> str:
     return SEVERITY.get((verdict or "").upper(), MUTED)
+
+
+# Human labels and display types for every column these pages render. Raw
+# `snake_case` headers and full ISO timestamps are how a database looks, not
+# how a console should read — and `threat_score` as a bare integer wastes the
+# one column where a reader most wants to compare magnitudes at a glance.
+_COLUMNS = {
+    "connected_at":      ("Time", "datetime", "small"),
+    "filtered_at":       ("Time", "datetime", "small"),
+    "attempted_at":      ("Time", "datetime", "small"),
+    "created_at":        ("Raised", "datetime", "small"),
+    "generated_at":      ("Generated", "datetime", "small"),
+    "first_seen":        ("First seen", "datetime", "small"),
+    "last_seen":         ("Last seen", "datetime", "small"),
+    "campaign_start":    ("Started", "datetime", "small"),
+    "campaign_end":      ("Ended", "datetime", "small"),
+    "ip_address":        ("Source IP", "text", "medium"),
+    "peer_ip":           ("Peer IP", "text", "medium"),
+    "country":           ("Country", "text", "small"),
+    "city":              ("City", "text", "small"),
+    "isp":               ("Network", "text", "medium"),
+    "asn":               ("ASN", "text", "medium"),
+    "method":            ("Method", "text", "small"),
+    "path":              ("Path", "text", "medium"),
+    "user_agent":        ("User agent", "text", "large"),
+    "service":           ("Service", "text", "small"),
+    "port":              ("Port", "int", "small"),
+    "threat_score":      ("Threat", "score", "small"),
+    "verdict":           ("Verdict", "text", "small"),
+    "severity":          ("Severity", "text", "small"),
+    "alert_type":        ("Detection", "text", "medium"),
+    "total_connections": ("Sessions", "int", "small"),
+    "attacker_count":    ("Attackers", "int", "small"),
+    "abuseipdb_score":   ("AbuseIPDB", "int", "small"),
+    "otx_pulse_count":   ("OTX", "int", "small"),
+    "username":          ("Username", "text", "medium"),
+    "password":          ("Password", "text", "medium"),
+    "hits":              ("Hits", "int", "small"),
+    "cnt":               ("Count", "int", "small"),
+    "id":                ("ID", "int", "small"),
+    "connection_id":     ("Conn", "int", "small"),
+    "evidence":          ("Evidence", "text", "large"),
+    "acknowledged":      ("Ack", "bool", "small"),
+}
+
+
+def table(df, columns: Optional[Sequence[str]] = None, height: Optional[int] = None) -> None:
+    """
+    Render a dataframe with human column labels and sensible display types.
+
+    Still `st.dataframe`, which treats every cell as inert text — this changes
+    only presentation, never the rendering guarantee that lets attacker-supplied
+    values (paths, User-Agents, captured credentials) be shown at all.
+
+    `columns` selects and orders; unknown columns fall through with their raw
+    name rather than being dropped, so a new field shows up rather than
+    silently disappearing.
+    """
+    if columns:
+        df = df[[c for c in columns if c in df.columns]]
+
+    config = {}
+    for col in df.columns:
+        label, kind, width = _COLUMNS.get(col, (col.replace("_", " ").title(), "text", None))
+        if kind == "datetime":
+            config[col] = st.column_config.DatetimeColumn(label, format="D MMM HH:mm", width=width)
+        elif kind == "score":
+            # A progress bar makes 5 vs 20 vs 85 comparable at a glance in a way
+            # the integer alone does not.
+            config[col] = st.column_config.ProgressColumn(
+                label, format="%d", min_value=0, max_value=100, width=width
+            )
+        elif kind == "int":
+            config[col] = st.column_config.NumberColumn(label, format="%d", width=width)
+        elif kind == "bool":
+            config[col] = st.column_config.CheckboxColumn(label, width=width)
+        else:
+            config[col] = st.column_config.TextColumn(label, width=width)
+
+    st.dataframe(df, width="stretch", hide_index=True, column_config=config,
+                 **({"height": height} if height else {}))
 
 
 def style_chart(fig, height: int = 320):

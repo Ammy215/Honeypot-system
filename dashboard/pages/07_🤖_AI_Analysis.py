@@ -23,7 +23,7 @@ st.set_page_config(page_title="HoneyShield — AI Analysis", page_icon="🤖", l
 require_auth("🤖", "AI Analysis")
 
 theme.page_header(
-    "🤖",
+    "",
     "AI Threat Analyst",
     "Generates a written assessment for one attacker from its captured record only. "
     "The model is instructed to state gaps as gaps rather than fill them — a sparse "

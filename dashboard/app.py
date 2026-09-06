@@ -32,7 +32,7 @@ st.set_page_config(
 require_auth("🍯", "Overview")
 
 theme.page_header(
-    "🍯",
+    "",
     "Operations Overview",
     "Live state of the deployed HTTP honeypot. Capture volume is expected to be "
     "low — this is a single unadvertised host, so a quiet feed is a normal "
@@ -83,7 +83,7 @@ else:
     status, tone, note = "NO SIGNAL", theme.MUTED, "no probes recorded yet"
 
 theme.kpis([
-    {"label": "Sensor status", "value": status, "note": note, "tone": tone},
+    {"label": "Sensor status", "value": status, "note": note, "tone": tone, "dot": True},
     {"label": "Probes filtered", "value": filtered["total"],
      "note": "kept out of capture data", "tone": theme.MUTED},
     {"label": "Last hour", "value": filtered["last_hour"], "note": "health checks", "tone": theme.MUTED},
@@ -105,8 +105,8 @@ if recent:
     df = pd.DataFrame(recent)
     keep = [c for c in ("connected_at", "ip_address", "country", "service", "port",
                         "threat_score", "verdict") if c in df.columns]
-    st.dataframe(df[keep], width="stretch", hide_index=True)
-    st.page_link("pages/01_🔴_Live_Feed.py", label="Open the full live feed", icon="🔴")
+    theme.table(df[keep])
+    st.page_link("pages/01_🔴_Live_Feed.py", label="Open the full live feed", icon=":material/arrow_forward:")
 else:
     theme.empty_state(
         "📡",
@@ -124,8 +124,8 @@ if top:
     tdf = pd.DataFrame(top)
     keep = [c for c in ("ip_address", "country", "isp", "threat_score", "verdict",
                         "total_connections", "last_seen") if c in tdf.columns]
-    st.dataframe(tdf[keep], width="stretch", hide_index=True)
-    st.page_link("pages/02_🌍_Attacker_Intel.py", label="Open attacker intelligence", icon="🌍")
+    theme.table(tdf[keep])
+    st.page_link("pages/02_🌍_Attacker_Intel.py", label="Open attacker intelligence", icon=":material/arrow_forward:")
 else:
     theme.empty_state(
         "🌍",

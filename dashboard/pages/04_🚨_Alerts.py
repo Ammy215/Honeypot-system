@@ -23,7 +23,7 @@ st.set_page_config(page_title="HoneyShield — Alerts", page_icon="🚨", layout
 require_auth("🚨", "Alerts")
 
 theme.page_header(
-    "🚨",
+    "",
     "Alerts",
     "Detections raised by the brute-force, credential-stuffing and correlation "
     "engines. Acknowledge an alert once you have triaged it.",
@@ -91,4 +91,4 @@ for alert in alerts:
                 st.rerun()
 
 theme.section("Table view", "The same alerts, sortable and exportable.")
-st.dataframe(pd.DataFrame(alerts), width="stretch", hide_index=True)
+theme.table(pd.DataFrame(alerts))

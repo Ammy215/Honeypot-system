@@ -26,7 +26,7 @@ st.set_page_config(page_title="HoneyShield — Live Feed", page_icon="🔴", lay
 require_auth("🔴", "Live Feed")
 
 theme.page_header(
-    "🔴",
+    "",
     "Live Attack Feed",
     "Every connection the honeypot captured, newest first, with enrichment "
     "resolved at capture time.",
@@ -64,7 +64,7 @@ if connections:
     # method/path/user_agent are attacker-controlled. st.dataframe renders cell
     # contents as inert text, which is why they appear here and never in a
     # markdown or HTML sink.
-    st.dataframe(df[order], width="stretch", height=430, hide_index=True)
+    theme.table(df[order], height=430)
     st.caption(f"Showing {len(df)} most recent connection(s). `method`, `path` and "
                "`user_agent` are recorded verbatim from the request — they show what "
                "was probed for, not just that someone connected.")
@@ -74,7 +74,7 @@ if connections:
         st.markdown("##### Most-probed paths")
         counts = (probed.groupby("path").size().reset_index(name="hits")
                   .sort_values("hits", ascending=False).head(15))
-        st.dataframe(counts, width="stretch", hide_index=True)
+        theme.table(counts)
 elif service:
     theme.empty_state(
         "🔍",
@@ -116,7 +116,7 @@ if filtered["recent"]:
         # st.dataframe never interprets cell contents as HTML/markdown, which
         # matters here: `path` and `method` come off the wire from whoever
         # connected, so they are attacker-controlled text.
-        st.dataframe(pd.DataFrame(filtered["recent"]), width="stretch", hide_index=True)
+        theme.table(pd.DataFrame(filtered["recent"]))
 elif filtered["total"] == 0:
     theme.empty_state(
         "🛡️",
@@ -131,7 +131,7 @@ theme.section("Recent alerts", "Detections raised by the brute-force and correla
 
 alerts = bridge_run(db.list_alerts(limit=10))
 if alerts:
-    st.dataframe(pd.DataFrame(alerts), width="stretch", hide_index=True)
+    theme.table(pd.DataFrame(alerts))
 else:
     theme.empty_state(
         "🔔",
