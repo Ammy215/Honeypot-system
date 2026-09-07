@@ -205,10 +205,18 @@ def escapes_hostile_input():
     for payload in payloads:
         emitted = []
         with patch("streamlit.markdown", side_effect=lambda html, **kw: emitted.append(html)):
+            # Every helper in theme.py that emits raw HTML must appear here.
+            # A sink added without a payload test is how this guarantee rots.
             theme.page_header(payload, payload, payload, eyebrow=payload)
             theme.kpis([{"label": payload, "value": payload, "note": payload, "tone": payload}])
             theme.section(payload, payload)
             theme.empty_state(payload, payload, payload)
+            theme.subsection(payload)
+            theme.facts({payload: payload, "Country": payload})
+            theme.meter(payload, 42, tone=payload, note=payload)
+            theme.meter(payload, None, note=payload)
+            theme.auth_brand(payload, payload)
+            theme.composition([{"label": payload, "value": 1, "color": payload}])
         blob = " ".join(emitted)
         check(f"payload never emitted raw: {payload[:24]!r}", payload in blob, False)
         check_true(f"payload appears HTML-escaped instead: {payload[:24]!r}",
@@ -221,6 +229,24 @@ def escapes_hostile_input():
         sidebar.markdown.side_effect = lambda html, **kw: emitted.append(html)
         theme.sidebar_identity(XSS)
     check("sidebar identity escapes its username", XSS in " ".join(emitted), False)
+
+    # Completeness: every public helper that emits raw HTML must be exercised
+    # above. Without this, adding a sink and forgetting to test it silently
+    # narrows the guarantee — the payload tests would still pass, on the
+    # helpers that happen to be listed.
+    import ast
+    theme_src = (REPO_ROOT / "dashboard" / "theme.py").read_text(encoding="utf-8")
+    sinks = {
+        n.name for n in ast.walk(ast.parse(theme_src))
+        if isinstance(n, ast.FunctionDef) and not n.name.startswith("_")
+        and "unsafe_allow_html=True" in (ast.get_source_segment(theme_src, n) or "")
+    }
+    # Exempt only helpers that interpolate NO caller-supplied value: inject()
+    # emits the static stylesheet, sidebar_nav() a fixed label plus page links.
+    NO_USER_DATA = {"inject", "sidebar_nav"}
+    this_test = (REPO_ROOT / "tests" / "test_dashboard_security.py").read_text(encoding="utf-8")
+    untested = sorted(s for s in sinks - NO_USER_DATA if f"theme.{s}(" not in this_test)
+    check("every raw-HTML theme helper is XSS-tested", untested, [])
 
 
 # ═══════════════════════════════════════════════════════════════════════════

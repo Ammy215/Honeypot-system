@@ -15,9 +15,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import config
 from dashboard import theme
-from dashboard.async_bridge import run as bridge_run
+from dashboard import data
 from dashboard.login import require_auth
-from honeypot.detectors.async_correlation import detect_asn_campaigns, get_campaign_members
 
 st.set_page_config(page_title="HoneyShield — Campaigns", page_icon="🎪", layout="wide")
 require_auth("🎪", "Campaigns")
@@ -38,9 +37,7 @@ with st.sidebar:
     min_attackers = st.slider("Minimum attackers per ASN", 2, 10,
                               config.CAMPAIGN_MIN_ATTACKERS)
 
-campaigns = bridge_run(
-    detect_asn_campaigns(window_seconds=window_hours * 3600, min_attackers=min_attackers)
-)
+campaigns = data.campaigns(window_hours * 3600, min_attackers)
 
 if not campaigns:
     theme.empty_state(
@@ -89,7 +86,7 @@ theme.kpis([
 
 st.caption(f"Active {campaign['campaign_start']} → {campaign['campaign_end']}")
 
-members = bridge_run(get_campaign_members(campaign["ip_addresses"]))
+members = data.campaign_members(tuple(campaign["ip_addresses"]))
 if members:
     mdf = pd.DataFrame(members)
     cols = [c for c in ("ip_address", "country", "city", "isp", "threat_score",

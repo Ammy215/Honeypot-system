@@ -14,6 +14,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dashboard import theme
+from dashboard import data
 from dashboard.async_bridge import run as bridge_run
 from dashboard.login import require_auth
 from database.db_async import db
@@ -37,7 +38,7 @@ if not is_available():
         "requestable below and will return a clear message rather than crashing."
     )
 
-attackers = bridge_run(db.list_attackers(limit=200))
+attackers = data.attackers(None)
 if not attackers:
     theme.empty_state(
         "🤖",
@@ -72,6 +73,7 @@ theme.kpis([
 if st.button("Generate threat report", type="primary"):
     with st.spinner(f"Analysing {selected_ip} — retries automatically if Gemini is busy…"):
         result = bridge_run(generate_attacker_report(selected_ip))
+    data.refresh()   # a new report invalidates the cached history
 
     if result["error"]:
         # Transient provider conditions are retried inside the analyst; by the
@@ -88,7 +90,7 @@ if st.button("Generate threat report", type="primary"):
 
 theme.section("Report history", f"Previous assessments generated for {selected_ip}.")
 
-reports = bridge_run(db.list_ai_reports_for_ip(selected_ip, limit=10))
+reports = data.reports_for(selected_ip)
 if reports:
     for r in reports:
         with st.expander(f"Report from {r['generated_at']}"):

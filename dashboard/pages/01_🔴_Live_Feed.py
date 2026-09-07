@@ -18,9 +18,8 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dashboard import theme
-from dashboard.async_bridge import run as bridge_run
+from dashboard import data
 from dashboard.login import require_auth
-from database.db_async import db
 
 st.set_page_config(page_title="HoneyShield — Live Feed", page_icon="🔴", layout="wide")
 require_auth("🔴", "Live Feed")
@@ -39,7 +38,8 @@ with st.sidebar:
     auto_refresh = st.checkbox("Auto-refresh (15s)", value=False)
     service_filter = st.selectbox("Service", ["All", "ssh", "ftp", "telnet", "http"])
 
-summary = bridge_run(db.summary_counts())
+_d = data.live_feed(service_filter if service_filter != "All" else None)
+summary = _d["summary"]
 theme.kpis([
     {"label": "Connections", "value": summary["total_connections"], "note": "captured sessions"},
     {"label": "Attackers", "value": summary["total_attackers"], "note": "distinct source IPs",
@@ -54,7 +54,7 @@ theme.kpis([
 theme.section("Captured connections", "Resolved source IP, service and enrichment per session.")
 
 service = None if service_filter == "All" else service_filter
-connections = bridge_run(db.list_recent_connections(limit=100, service=service))
+connections = _d["connections"]
 
 if connections:
     df = pd.DataFrame(connections)
@@ -71,7 +71,7 @@ if connections:
 
     probed = df[df["path"].notna()] if "path" in df.columns else df.iloc[0:0]
     if not probed.empty:
-        st.markdown("##### Most-probed paths")
+        theme.subsection("Most-probed paths")
         counts = (probed.groupby("path").size().reset_index(name="hits")
                   .sort_values("hits", ascending=False).head(15))
         theme.table(counts)
@@ -101,7 +101,7 @@ theme.section(
     "empty feed reads as 'genuinely quiet' rather than 'silently filtered'.",
 )
 
-filtered = bridge_run(db.filtered_connection_stats())
+filtered = _d["filtered"]
 theme.kpis([
     {"label": "Filtered total", "value": filtered["total"], "note": "since deployment",
      "tone": theme.MUTED},
@@ -129,7 +129,7 @@ elif filtered["total"] == 0:
 # ── Alerts ────────────────────────────────────────────────────────────────
 theme.section("Recent alerts", "Detections raised by the brute-force and correlation engines.")
 
-alerts = bridge_run(db.list_alerts(limit=10))
+alerts = _d["alerts"]
 if alerts:
     theme.table(pd.DataFrame(alerts))
 else:

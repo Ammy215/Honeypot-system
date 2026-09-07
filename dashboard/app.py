@@ -18,9 +18,8 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dashboard import theme
-from dashboard.async_bridge import run as bridge_run
+from dashboard import data
 from dashboard.login import require_auth
-from database.db_async import db
 
 st.set_page_config(
     page_title="HoneyShield — Overview",
@@ -40,8 +39,10 @@ theme.page_header(
     eyebrow="HoneyShield SOC",
 )
 
-summary = bridge_run(db.summary_counts())
-filtered = bridge_run(db.filtered_connection_stats())
+# One gathered, cached read for the whole page — see dashboard/data.py for
+# why this is a bundle rather than four separate awaits.
+_d = data.overview()
+summary, filtered = _d["summary"], _d["filtered"]
 
 theme.kpis([
     {"label": "Attackers", "value": summary["total_attackers"],
@@ -100,7 +101,7 @@ if status == "STALE":
 # ── Recent activity ───────────────────────────────────────────────────────
 theme.section("Recent activity", "The five most recent captured connections.")
 
-recent = bridge_run(db.list_recent_connections(limit=5))
+recent = _d["recent"]
 if recent:
     df = pd.DataFrame(recent)
     keep = [c for c in ("connected_at", "ip_address", "country", "service", "port",
@@ -119,7 +120,7 @@ else:
 # ── Top attackers ─────────────────────────────────────────────────────────
 theme.section("Highest-scoring attackers", "Ranked by weighted threat score out of 100.")
 
-top = bridge_run(db.list_attackers(limit=5))
+top = _d["top"]
 if top:
     tdf = pd.DataFrame(top)
     keep = [c for c in ("ip_address", "country", "isp", "threat_score", "verdict",

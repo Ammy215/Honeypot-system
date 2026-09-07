@@ -25,10 +25,8 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dashboard import theme
-from dashboard.async_bridge import run as bridge_run
+from dashboard import data
 from dashboard.login import require_auth
-from database.db_async import db
-from honeypot.detectors.async_correlation import detect_asn_campaigns
 
 st.set_page_config(page_title="HoneyShield — Threat Hunting", page_icon="🔍", layout="wide")
 require_auth("🔍", "Threat Hunting")
@@ -79,11 +77,12 @@ theme.section(
 # An empty substring matches every row, which is how we report the size of the
 # searchable corpus — "no matches" and "nothing to search" are different
 # answers and the empty states below distinguish them.
-total_attempts = len(bridge_run(db.search_login_attempts("", limit=500)))
+_d = data.hunting_context()
+total_attempts = _d["total_attempts"]
 pattern = st.text_input("Username or password contains…", placeholder="e.g. admin, root, 123456")
 
 if pattern:
-    results = bridge_run(db.search_login_attempts(pattern, limit=200))
+    results = data.credential_search(pattern)
     if results:
         theme.table(pd.DataFrame(results), height=380)
         st.caption(f"{len(results)} matching login attempt(s).")
@@ -108,7 +107,7 @@ theme.section("Search attacker IPs",
 
 ip_pattern = st.text_input("IP contains…", placeholder="e.g. 35.227")
 if ip_pattern:
-    attackers = bridge_run(db.list_attackers(limit=200, search_ip=ip_pattern))
+    attackers = data.attackers(ip_pattern)
     if attackers:
         adf = pd.DataFrame(attackers)
         cols = [c for c in ("ip_address", "country", "isp", "asn", "threat_score",
@@ -125,7 +124,7 @@ theme.section(
     "clearest signal separating a deliberate actor from a single-port scanner.",
 )
 
-all_alerts = bridge_run(db.list_alerts(limit=500))
+all_alerts = _d["alerts"]
 multi_service_alerts = [a for a in all_alerts if a["alert_type"] == "multi_service"]
 if multi_service_alerts:
     theme.table(pd.DataFrame([{"ip_address": a["ip_address"], "created_at": a["created_at"],
@@ -144,7 +143,7 @@ else:
 theme.section("ASN campaigns",
               "Three or more IPs from the same network active within one window.")
 
-campaigns = bridge_run(detect_asn_campaigns())
+campaigns = _d["campaigns"]
 if campaigns:
     theme.table(pd.DataFrame(campaigns)[["asn", "attacker_count", "campaign_start",
                                  "campaign_end", "severity"]])

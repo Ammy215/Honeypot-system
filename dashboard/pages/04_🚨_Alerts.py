@@ -15,6 +15,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dashboard import theme
+from dashboard import data
 from dashboard.async_bridge import run as bridge_run
 from dashboard.login import require_auth
 from database.db_async import db
@@ -38,8 +39,8 @@ with st.sidebar:
 severity = None if severity_filter == "All" else severity_filter
 acknowledged = {"All": None, "Unacknowledged": False, "Acknowledged": True}[ack_filter]
 
-alerts = bridge_run(db.list_alerts(limit=200, severity=severity, acknowledged=acknowledged))
-all_alerts = bridge_run(db.list_alerts(limit=500))
+_d = data.alerts(severity, acknowledged)
+alerts, all_alerts = _d["filtered"], _d["all"]
 
 counts = {level: sum(1 for a in all_alerts if a.get("severity") == level)
           for level in ("CRITICAL", "HIGH", "MEDIUM", "LOW")}
@@ -88,6 +89,7 @@ for alert in alerts:
                 st.success("Acknowledged")
             elif st.button("Acknowledge", key=f"ack_{alert['id']}", width="stretch"):
                 bridge_run(db.acknowledge_alert(alert["id"]))
+                data.refresh()   # the cached alert list is now stale
                 st.rerun()
 
 theme.section("Table view", "The same alerts, sortable and exportable.")

@@ -170,6 +170,12 @@ HEADER_DIV = '<div class="hs-header">'
 LOGIN_DIV = '<div class="hs-auth">'
 
 
+def theme_nav_targets():
+    """The nav entries the design system declares."""
+    from dashboard import theme
+    return theme.NAV
+
+
 def _markup(at) -> str:
     """All markdown emitted by a run, so we can assert on design-system markers."""
     return " ".join(str(m.value) for m in at.markdown)
@@ -202,9 +208,23 @@ def test_login_form_is_usable():
     check_true(f"two inputs, username + password (got {len(at.text_input)})",
                len(at.text_input) == 2)
     check_true("a submit control exists", len(at.button) >= 1)
-    markup = _markup(at)
-    check_true("navigation is hidden before login", "stSidebarNav" in markup)
     check_true("no data is rendered before login", len(at.dataframe) == 0)
+
+    # Streamlit's built-in page menu must be OFF at config level, not merely
+    # hidden by CSS: the frontend paints it as soon as the browser connects,
+    # before any script output exists, so an injected stylesheet always loses
+    # that race and the raw menu flashes on the login screen.
+    cfg = (ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8")
+    check_true("built-in page nav disabled in config.toml",
+               "showSidebarNavigation = false" in cfg)
+
+    # And the replacement nav must not appear until authenticated.
+    before = len(at.get("page_link"))
+    check_true(f"no nav links before login (got {before})", before == 0)
+    after = len(render(APP, authenticated=True).get("page_link"))
+    check_true(f"nav links appear once authenticated (got {after}, "
+               f"expected >= {len(theme_nav_targets())})",
+               after >= len(theme_nav_targets()))
 
 
 def test_live_feed_shows_filtered_panel():
@@ -218,6 +238,106 @@ def test_live_feed_shows_filtered_panel():
         check_true(f"KPI present: {expected}", expected in markup)
     check_true("section heading present", "Filtered traffic" in markup)
     check_true("KPI cards use the design system", "hs-kpi" in markup)
+
+
+def test_pages_read_through_the_cache():
+    """
+    Pages must read via dashboard/data.py, never by awaiting db.* directly.
+
+    The database is a remote pooler with a ~200ms+ round-trip floor, and
+    Streamlit re-executes the whole script on every interaction. A page that
+    calls bridge_run(db.something()) pays that latency again on every click,
+    which is exactly the regression that made Overview take 4.3 seconds. Writes
+    are exempt — they must not be cached.
+    """
+    print("\n[9] pages read through the cached data layer")
+    WRITES = {"acknowledge_alert", "generate_attacker_report"}
+    offenders = []
+    for f in [APP] + PAGES:
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "bridge_run" and node.args):
+                continue
+            inner = node.args[0]
+            name = getattr(inner.func, "attr", getattr(inner.func, "id", "")) \
+                if isinstance(inner, ast.Call) else ""
+            if name not in WRITES:
+                offenders.append(f"{f.name}:{node.lineno} -> {name or '?'}")
+    check("no page awaits a read query directly", not offenders,
+          f"offenders: {offenders} — route reads through dashboard/data.py")
+
+
+def test_data_layer_is_concurrent_and_cached():
+    print("\n[10] the data layer gathers and caches")
+    src = (ROOT / "dashboard" / "data.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+
+    cached, gathering = set(), set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            for dec in node.decorator_list:
+                target = dec.func if isinstance(dec, ast.Call) else dec
+                if getattr(target, "attr", "") == "cache_data":
+                    cached.add(node.name)
+        if isinstance(node, ast.Attribute) and node.attr == "gather":
+            gathering.add(True)
+
+    # Every page bundle must be cached.
+    for fn in ("overview", "live_feed", "analytics", "alerts", "hunting_context"):
+        check_true(f"{fn}() is cached", fn in cached, f"cached: {sorted(cached)}")
+    check_true("multi-query bundles use asyncio.gather", bool(gathering))
+
+    # summary_counts must be a single statement, not a loop of four.
+    db_src = (ROOT / "database" / "db_async.py").read_text(encoding="utf-8")
+    body = db_src.split("async def summary_counts", 1)[1].split("async def", 1)[0]
+    check("summary_counts issues one SELECT", body.count("SELECT COUNT(*)"), 4)
+    check_true("…combined into a single statement (not four fetches)",
+               body.count("fetchrow") <= 1 and "for key, q in" not in body)
+
+    # Threat Hunting must count, not download, the credential corpus.
+    check_true("count_login_attempts exists", "async def count_login_attempts" in db_src)
+    hunting = next(p for p in PAGES if "Threat_Hunting" in p.name).read_text(encoding="utf-8")
+    check_true("hunting sizes the corpus without fetching 500 rows",
+               'search_login_attempts("", limit=500)' not in hunting)
+
+
+def test_pages_use_theme_components():
+    """
+    Pages compose the design system; they do not hand-roll equivalents.
+
+    Each of these has a theme.py counterpart, and calling the Streamlit
+    primitive directly bypasses the shared styling — which is how a page ends
+    up looking like a different application. The point of the design system is
+    that changing it once changes everything.
+    """
+    print("\n[11] pages use theme components, not raw primitives")
+    BANNED = {
+        "plotly_chart": "theme.plot()",
+        "dataframe": "theme.table()",
+        "metric": "theme.kpis()",
+    }
+    offenders = []
+    for f in [APP] + PAGES:
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "st" and node.func.attr in BANNED):
+                offenders.append(f"{f.name}:{node.lineno} st.{node.func.attr} "
+                                 f"-> use {BANNED[node.func.attr]}")
+    check("no page calls a styled primitive directly", not offenders,
+          "; ".join(offenders))
+
+    # Markdown sub-headings bypass the type scale; theme.subsection() exists.
+    heading_offenders = []
+    for f in [APP] + PAGES:
+        for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if "st.markdown(" in line and ("#####" in line or "####" in line):
+                heading_offenders.append(f"{f.name}:{i}")
+    check("no page uses markdown sub-headings", not heading_offenders,
+          f"{heading_offenders} — use theme.subsection()")
 
 
 def test_design_system_applied():
@@ -241,6 +361,9 @@ if __name__ == "__main__":
     test_pages_gate_on_auth()
     test_login_form_is_usable()
     test_live_feed_shows_filtered_panel()
+    test_pages_read_through_the_cache()
+    test_data_layer_is_concurrent_and_cached()
+    test_pages_use_theme_components()
     test_design_system_applied()
 
     print("\n" + "=" * 70)

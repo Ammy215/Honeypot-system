@@ -142,38 +142,37 @@ p, li, label, .stMarkdown {{ color: var(--text); }}
 }}
 [data-testid="stSidebar"] .block-container {{ padding: 1.1rem .85rem !important; }}
 
-/* Streamlit renders its page nav ABOVE any content we add, which puts the
-   brand under the menu. Reordering the sidebar's flex column fixes that
-   without replacing the nav — its routing is the only one that resolves page
-   URLs reliably. */
-[data-testid="stSidebar"] > div:first-child {{ display: flex; flex-direction: column; }}
-[data-testid="stSidebarUserContent"], [data-testid="stSidebarContent"] {{ order: 2; }}
-[data-testid="stSidebarNav"] {{ order: 1; padding: 1.15rem .75rem .35rem !important; max-height: none; }}
-[data-testid="stSidebarNav"] > ul {{ padding: 0 !important; }}
-[data-testid="stSidebarNav"] li {{ margin: 1px 0 !important; list-style: none; }}
-[data-testid="stSidebarNav"] li a {{
-  border-radius: 9px; padding: .46rem .62rem !important; gap: .6rem;
+/* Streamlit's built-in page nav is disabled in config.toml (it painted before
+   any script output and flashed unstyled on the login screen), so no rules for
+   it are kept here — dead selectors for an element that never renders read as
+   if the menu still exists. Everything in the sidebar is now our own content,
+   in the order we emit it, so no reordering is needed either. */
+
+/* Navigation is now built with st.page_link (see theme.sidebar_nav) because
+   the built-in menu is disabled in config.toml — it painted before any script
+   output and flashed unstyled on the login screen. */
+[data-testid="stSidebar"] [data-testid="stPageLink"] a,
+[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"] {{
+  border-radius: 9px; padding: .44rem .6rem !important; gap: .62rem;
   color: #97A3B8 !important; font-size: .875rem !important; font-weight: 500 !important;
-  border: 1px solid transparent; transition: background .14s ease, color .14s ease, border-color .14s ease;
+  border: 1px solid transparent; margin: 1px 0;
+  transition: background .14s ease, color .14s ease, border-color .14s ease;
 }}
-[data-testid="stSidebarNav"] li a:hover {{
-  background: rgba(255,255,255,.045) !important; color: var(--text) !important;
+[data-testid="stSidebar"] [data-testid="stPageLink"] a:hover,
+[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"]:hover {{
+  background: rgba(255,255,255,.05) !important; color: var(--text) !important;
 }}
-[data-testid="stSidebarNav"] li a[aria-current="page"] {{
+[data-testid="stSidebar"] [data-testid="stPageLink"] a[aria-current="page"],
+[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"][aria-current="page"] {{
   background: linear-gradient(90deg, rgba(245,165,36,.15), rgba(245,165,36,.03)) !important;
   border-color: rgba(245,165,36,.28); color: var(--text) !important; font-weight: 600 !important;
 }}
-[data-testid="stSidebarNav"] li a span {{ font-size: .875rem !important; }}
-/* The emoji in each page filename renders at icon size and reads as clip art. */
-[data-testid="stSidebarNav"] li a span:first-child {{
-  filter: grayscale(.35) opacity(.85); font-size: .82rem !important;
+[data-testid="stSidebar"] [data-testid="stPageLink"] span[data-testid="stIconMaterial"] {{
+  color: #7C8AA3; font-size: 1.05rem;
 }}
-[data-testid="stSidebarNav"] li a[aria-current="page"] span:first-child {{ filter: none; }}
-
-/* Section label above the nav. */
-[data-testid="stSidebarNav"]::before {{
-  content: 'NAVIGATION'; display: block; font-size: .63rem; font-weight: 700;
-  letter-spacing: .16em; color: #5C6883; padding: 0 .62rem .5rem;
+[data-testid="stSidebar"] [data-testid="stPageLink"] a:hover span[data-testid="stIconMaterial"],
+[data-testid="stSidebar"] [data-testid="stPageLink"] a[aria-current="page"] span[data-testid="stIconMaterial"] {{
+  color: var(--accent);
 }}
 
 /* Sidebar sign-out sits at the foot, quieter than a primary action. */
@@ -263,6 +262,117 @@ p, li, label, .stMarkdown {{ color: var(--text); }}
   font-size: .72rem; font-weight: 600; letter-spacing: .04em;
   border: 1px solid currentColor; background: rgba(255,255,255,.04);
 }}
+
+/* ── Sub-section heading ──────────────────────────────────────────────── */
+/* Below theme.section() in the hierarchy — for the two or three panels that
+   sit inside one section. Replaces ad-hoc "##### Title" markdown, which
+   inherited Streamlit's heading sizes and broke the type scale. */
+.hs-sub-head {{
+  font-size: .72rem; font-weight: 700; letter-spacing: .13em; text-transform: uppercase;
+  color: #7C8AA3; margin: .2rem 0 .6rem;
+}}
+
+/* ── Facts card ───────────────────────────────────────────────────────── */
+/* Label/value pairs. Previously faked with a two-column dataframe, which
+   rendered a sortable grid with "Field"/"Value" headers around what is really
+   a definition list. */
+.hs-facts {{
+  background: linear-gradient(160deg, var(--surface) 0%, var(--surface-2) 100%);
+  border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+  animation: hs-rise .38s cubic-bezier(.22,.61,.36,1) both;
+}}
+.hs-facts .hs-f-row {{
+  display: flex; align-items: baseline; gap: 1rem; justify-content: space-between;
+  padding: .58rem .95rem; border-bottom: 1px solid rgba(255,255,255,.045);
+}}
+.hs-facts .hs-f-row:last-child {{ border-bottom: 0; }}
+.hs-facts .hs-f-key {{
+  font-size: .72rem; font-weight: 600; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--muted); white-space: nowrap;
+}}
+.hs-facts .hs-f-val {{
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: .82rem;
+  color: var(--text); text-align: right; word-break: break-word;
+}}
+.hs-facts .hs-f-val.hs-f-muted {{ color: #5F6B82; font-style: italic; }}
+
+/* ── Charts ───────────────────────────────────────────────────────────── */
+/* Plotly renders into a bare div, so without this a chart floats on the page
+   background while every neighbouring panel sits on a card — the single
+   biggest reason the analytics page read as a different app. */
+[data-testid="stPlotlyChart"] {{
+  background: linear-gradient(160deg, var(--surface) 0%, var(--surface-2) 100%);
+  border: 1px solid var(--border); border-radius: 12px;
+  padding: .85rem .7rem .55rem; overflow: hidden;
+  box-shadow: 0 14px 34px -22px rgba(0,0,0,.9);
+  animation: hs-rise .38s cubic-bezier(.22,.61,.36,1) both;
+}}
+[data-testid="stPlotlyChart"] .modebar {{ display: none !important; }}
+
+/* ── Composition bar ──────────────────────────────────────────────────── */
+/* A segmented proportion bar. Replaces pie/donut charts, which convey nothing
+   at one category (a 100% circle) and force angle comparison at several.
+   A single bar reads correctly at any n, and costs no chart library. */
+.hs-comp {{
+  background: linear-gradient(160deg, var(--surface) 0%, var(--surface-2) 100%);
+  border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.1rem;
+  animation: hs-rise .38s cubic-bezier(.22,.61,.36,1) both;
+}}
+.hs-comp .hs-c-track {{
+  display: flex; height: 12px; border-radius: 999px; overflow: hidden;
+  background: rgba(255,255,255,.05); margin-bottom: .85rem;
+}}
+.hs-comp .hs-c-seg {{
+  height: 100%; animation: hs-grow .55s cubic-bezier(.22,.61,.36,1) both;
+  border-right: 1px solid rgba(11,15,23,.65);
+}}
+.hs-comp .hs-c-seg:last-child {{ border-right: 0; }}
+.hs-comp .hs-c-legend {{ display: flex; flex-direction: column; gap: .42rem; }}
+.hs-comp .hs-c-item {{
+  display: flex; align-items: center; gap: .55rem; font-size: .82rem;
+}}
+.hs-comp .hs-c-dot {{
+  width: 9px; height: 9px; border-radius: 3px; flex: none;
+}}
+.hs-comp .hs-c-name {{ color: var(--text); flex: 1; }}
+.hs-comp .hs-c-num {{
+  font-family: 'JetBrains Mono', ui-monospace, monospace; color: var(--text);
+}}
+.hs-comp .hs-c-pct {{
+  font-family: 'JetBrains Mono', ui-monospace, monospace; color: var(--muted);
+  font-size: .78rem; min-width: 3.4rem; text-align: right;
+}}
+
+/* ── Meter ────────────────────────────────────────────────────────────── */
+/* A labelled 0-100 bar. Same visual language as the progress column in
+   theme.table(), so a score reads identically wherever it appears — unlike a
+   Plotly gauge, which imported a second chart aesthetic for one number. */
+.hs-meter {{
+  background: linear-gradient(160deg, var(--surface) 0%, var(--surface-2) 100%);
+  border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.1rem;
+  animation: hs-rise .38s cubic-bezier(.22,.61,.36,1) both;
+}}
+.hs-meter .hs-m-top {{
+  display: flex; align-items: baseline; justify-content: space-between; margin-bottom: .55rem;
+}}
+.hs-meter .hs-m-label {{
+  font-size: .72rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted);
+}}
+.hs-meter .hs-m-value {{
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 1.4rem;
+  font-weight: 500; color: var(--text);
+}}
+.hs-meter .hs-m-track {{
+  height: 7px; border-radius: 999px; background: rgba(255,255,255,.06); overflow: hidden;
+}}
+.hs-meter .hs-m-fill {{
+  height: 100%; border-radius: 999px; background: var(--tone, var(--accent));
+  box-shadow: 0 0 12px -2px var(--tone, var(--accent));
+  animation: hs-grow .6s cubic-bezier(.22,.61,.36,1) both;
+}}
+.hs-meter .hs-m-note {{ font-size: .76rem; color: var(--muted); margin-top: .55rem; line-height: 1.5; }}
+@keyframes hs-grow {{ from {{ width: 0; }} }}
 
 /* ── Data tables ──────────────────────────────────────────────────────── */
 [data-testid="stDataFrame"] {{
@@ -412,6 +522,25 @@ p, li, label, .stMarkdown {{ color: var(--text); }}
   text-align: center; color: #5F6B82; font-size: .74rem; margin-top: 1.15rem;
   letter-spacing: .04em;
 }}
+
+/* While a rerun is in flight, Streamlit stamps data-stale="true" on each
+   element container and dims it rather than removing it. For ordinary reruns
+   that is the right behaviour — dimmed previous data beats a blank page. For
+   the SIGN-IN transition it is not: the old login card hangs, greyed, on top
+   of the dashboard that is loading behind it, which reads as a rendering bug.
+   Only the auth elements are hidden outright; every other page keeps
+   Streamlit's normal dimming. */
+[data-testid="stElementContainer"][data-stale="true"]:has([data-testid="stForm"]),
+[data-testid="stElementContainer"][data-stale="true"]:has(.hs-auth),
+[data-testid="stElementContainer"][data-stale="true"]:has(.hs-auth-foot) {{
+  display: none !important;
+}}
+
+/* Stale content elsewhere fades rather than sitting at full strength, so a
+   refresh reads as "updating" instead of "frozen". */
+[data-testid="stElementContainer"][data-stale="true"] {{
+  opacity: .38; transition: opacity .12s ease;
+}}
 </style>
 """
 
@@ -444,6 +573,44 @@ def inject(authenticated: bool = True) -> None:
             "{display:none !important;}</style>",
             unsafe_allow_html=True,
         )
+
+
+NAV = [
+    ("app.py", "Overview", ":material/dashboard:"),
+    ("pages/01_🔴_Live_Feed.py", "Live Feed", ":material/sensors:"),
+    ("pages/02_🌍_Attacker_Intel.py", "Attacker Intel", ":material/public:"),
+    ("pages/03_📈_Analytics.py", "Analytics", ":material/insights:"),
+    ("pages/04_🚨_Alerts.py", "Alerts", ":material/notifications_active:"),
+    ("pages/05_🔍_Threat_Hunting.py", "Threat Hunting", ":material/search:"),
+    ("pages/06_🎪_Campaigns.py", "Campaigns", ":material/hub:"),
+    ("pages/07_🤖_AI_Analysis.py", "AI Analysis", ":material/smart_toy:"),
+]
+
+
+def sidebar_nav() -> None:
+    """
+    Navigation, rendered only for authenticated sessions.
+
+    Replaces Streamlit's built-in page menu, which is disabled in config.toml
+    because the frontend paints it before any script output arrives — meaning
+    it flashed, unstyled, on the login screen no matter what CSS was injected.
+    Material icons replace the filename emoji, which rendered as clip art.
+
+    st.page_link cannot resolve page routes under Streamlit's AppTest harness
+    (it raises KeyError('url_pathname') with no page context), so failures are
+    swallowed: a test harness losing its nav is not worth an exception on a
+    page that otherwise renders correctly.
+    """
+    st.sidebar.markdown(
+        f'<div style="font-size:.63rem;font-weight:700;letter-spacing:.16em;'
+        f'color:#5C6883;padding:.15rem .1rem .45rem">NAVIGATION</div>',
+        unsafe_allow_html=True,
+    )
+    for target, label, icon in NAV:
+        try:
+            st.sidebar.page_link(target, label=label, icon=icon)
+        except Exception:  # noqa: BLE001 — see docstring
+            pass
 
 
 def auth_brand(title: str, tagline: str) -> None:
@@ -531,6 +698,97 @@ def severity_tone(verdict: Optional[str]) -> str:
     return SEVERITY.get((verdict or "").upper(), MUTED)
 
 
+def subsection(title: str) -> None:
+    """A heading one level below section(), for panels inside a section."""
+    st.markdown(f'<div class="hs-sub-head">{esc(title)}</div>', unsafe_allow_html=True)
+
+
+def facts(items: dict) -> None:
+    """
+    A label/value card — a definition list, not a table.
+
+    Values are escaped, so this is safe for enrichment data. It is NOT the
+    place for attacker-supplied text: those belong in table(), where cells are
+    inert by construction rather than by remembering to escape.
+    """
+    rows = []
+    for key, value in items.items():
+        empty = value in (None, "", "unknown")
+        shown = "not available" if empty else value
+        cls = "hs-f-val hs-f-muted" if empty else "hs-f-val"
+        rows.append(
+            f'<div class="hs-f-row"><span class="hs-f-key">{esc(key)}</span>'
+            f'<span class="{cls}">{esc(shown)}</span></div>'
+        )
+    st.markdown(f'<div class="hs-facts">{"".join(rows)}</div>', unsafe_allow_html=True)
+
+
+def composition(segments: Sequence[dict]) -> None:
+    """
+    A segmented proportion bar with a legend.
+
+    Each segment: {"label": str, "value": int|float, "color": str}.
+
+    Preferred over a pie or donut. At one category a donut is a filled circle
+    conveying nothing; at several, angles are harder to compare than lengths.
+    A stacked bar plus explicit counts and percentages answers "how much of
+    each" directly, and stays legible when one category dominates — which is
+    the normal case here, since only HTTP is deployed.
+    """
+    total = sum(float(s["value"]) for s in segments) or 1.0
+    bar, legend = [], []
+    for seg in segments:
+        pct = float(seg["value"]) / total * 100
+        color = seg.get("color", ACCENT)
+        bar.append(f'<div class="hs-c-seg" style="width:{pct:.2f}%;background:{esc(color)}"></div>')
+        legend.append(
+            f'<div class="hs-c-item">'
+            f'<span class="hs-c-dot" style="background:{esc(color)}"></span>'
+            f'<span class="hs-c-name">{esc(seg["label"])}</span>'
+            f'<span class="hs-c-num">{esc(seg["value"])}</span>'
+            f'<span class="hs-c-pct">{pct:.1f}%</span></div>'
+        )
+    st.markdown(
+        f'<div class="hs-comp"><div class="hs-c-track">{"".join(bar)}</div>'
+        f'<div class="hs-c-legend">{"".join(legend)}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def meter(label: str, value: Optional[float], maximum: float = 100,
+          tone: Optional[str] = None, note: str = "") -> None:
+    """
+    A labelled 0-100 bar, matching the progress column used inside table().
+
+    `value=None` renders an explicit "not measured" state rather than a zero
+    bar, because "no data" and "scored zero" mean very different things for a
+    reputation score.
+    """
+    if value is None:
+        st.markdown(
+            f'<div class="hs-meter"><div class="hs-m-top">'
+            f'<span class="hs-m-label">{esc(label)}</span>'
+            f'<span class="hs-m-value" style="color:#5F6B82">—</span></div>'
+            f'<div class="hs-m-track"></div>'
+            f'<div class="hs-m-note">{esc(note or "Not checked yet.")}</div></div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    pct = max(0.0, min(100.0, (float(value) / maximum) * 100))
+    tone = tone or ACCENT
+    note_html = f'<div class="hs-m-note">{esc(note)}</div>' if note else ""
+    st.markdown(
+        f'<div class="hs-meter" style="--tone:{esc(tone)}"><div class="hs-m-top">'
+        f'<span class="hs-m-label">{esc(label)}</span>'
+        f'<span class="hs-m-value">{esc(value)}<span style="font-size:.85rem;'
+        f'color:{MUTED}">/{esc(int(maximum))}</span></span></div>'
+        f'<div class="hs-m-track"><div class="hs-m-fill" style="width:{pct:.1f}%"></div></div>'
+        f"{note_html}</div>",
+        unsafe_allow_html=True,
+    )
+
+
 # Human labels and display types for every column these pages render. Raw
 # `snake_case` headers and full ISO timestamps are how a database looks, not
 # how a console should read — and `threat_score` as a bare integer wastes the
@@ -612,20 +870,45 @@ def table(df, columns: Optional[Sequence[str]] = None, height: Optional[int] = N
                  **({"height": height} if height else {}))
 
 
+CHART_SEQUENCE = [ACCENT, "#4A9EFF", "#3DD68C", "#F0426B", "#A78BFA", "#FF7A45"]
+
+
 def style_chart(fig, height: int = 320):
-    """Apply the palette to a Plotly figure so charts match the console."""
+    """
+    Apply the console's visual language to a Plotly figure.
+
+    Centralised deliberately: charts previously configured fonts, gridlines and
+    hover styling at each call site, so a palette change had to be repeated per
+    chart and drifted between them.
+    """
     fig.update_layout(
         height=height,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, sans-serif", color=MUTED, size=12),
-        margin=dict(l=10, r=10, t=30, b=10),
-        xaxis=dict(gridcolor=BORDER, zerolinecolor=BORDER, linecolor=BORDER),
-        yaxis=dict(gridcolor=BORDER, zerolinecolor=BORDER, linecolor=BORDER),
-        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=MUTED)),
-        colorway=[ACCENT, "#4A9EFF", "#3DD68C", "#F0426B", "#A78BFA", "#FF7A45"],
+        margin=dict(l=8, r=8, t=18, b=8),
+        xaxis=dict(gridcolor="rgba(255,255,255,.045)", zerolinecolor="rgba(255,255,255,.07)",
+                   linecolor="rgba(255,255,255,.07)", tickfont=dict(size=11)),
+        yaxis=dict(gridcolor="rgba(255,255,255,.045)", zerolinecolor="rgba(255,255,255,.07)",
+                   linecolor="rgba(255,255,255,.07)", tickfont=dict(size=11)),
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=MUTED, size=11)),
+        colorway=CHART_SEQUENCE,
+        # Tooltips inherited Plotly's light default, which flared white on a
+        # dark console every time the pointer crossed a series.
+        hoverlabel=dict(bgcolor=SURFACE_2, bordercolor=BORDER,
+                        font=dict(family="JetBrains Mono, monospace", color=TEXT, size=12)),
+        hovermode="closest",
     )
     return fig
+
+
+def plot(fig, height: int = 320) -> None:
+    """
+    Style and render a figure. Use this instead of st.plotly_chart directly, so
+    the modebar suppression and sizing stay in one place.
+    """
+    st.plotly_chart(style_chart(fig, height), width="stretch",
+                    config={"displayModeBar": False, "staticPlot": False})
 
 
 def sidebar_identity(username: str) -> None:
