@@ -1089,6 +1089,57 @@ class AsyncDatabase:
 
         return await self._run_sqlite(_work)
 
+    async def credential_stats(self, top_n: int = 10) -> dict:
+        """
+        Shape of the captured-credential corpus: totals plus the most-tried
+        usernames and passwords.
+
+        Threat Hunting opened with empty search boxes and no indication of what
+        was searchable. "What are they actually trying?" is the first question
+        an operator has, and it is answerable with aggregates — no search term
+        required. Returned as counts, so nothing attacker-supplied needs to
+        reach a raw-HTML sink; the values themselves still render via
+        theme.table, which is inert.
+        """
+        empty = {"total": 0, "unique_usernames": 0, "unique_passwords": 0,
+                 "unique_sources": 0, "top_usernames": [], "top_passwords": []}
+
+        totals_sql = """
+            SELECT COUNT(*)                        AS total,
+                   COUNT(DISTINCT username)        AS unique_usernames,
+                   COUNT(DISTINCT password)        AS unique_passwords,
+                   COUNT(DISTINCT ip_address)      AS unique_sources
+            FROM login_attempts
+        """
+        top_sql = ("SELECT {col} AS value, COUNT(*) AS attempts, "
+                   "COUNT(DISTINCT ip_address) AS sources "
+                   "FROM login_attempts WHERE {col} IS NOT NULL "
+                   "GROUP BY {col} ORDER BY attempts DESC, value ASC LIMIT {lim}")
+
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                totals = await conn.fetchrow(totals_sql)
+                users = await conn.fetch(top_sql.format(col="username", lim=int(top_n)))
+                pwds = await conn.fetch(top_sql.format(col="password", lim=int(top_n)))
+            if not totals:
+                return empty
+            return {**dict(totals),
+                    "top_usernames": [dict(r) for r in users],
+                    "top_passwords": [dict(r) for r in pwds]}
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            totals = conn.execute(totals_sql).fetchone()
+            users = conn.execute(top_sql.format(col="username", lim=int(top_n))).fetchall()
+            pwds = conn.execute(top_sql.format(col="password", lim=int(top_n))).fetchall()
+            if totals is None:
+                return empty
+            return {**dict(totals),
+                    "top_usernames": [dict(r) for r in users],
+                    "top_passwords": [dict(r) for r in pwds]}
+
+        return await self._run_sqlite(_work)
+
     async def search_login_attempts(self, pattern: str, limit: int = 100) -> list:
         """Substring search across username/password — used by Threat Hunting."""
         like = f"%{pattern}%"

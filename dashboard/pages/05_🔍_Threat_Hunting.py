@@ -1,10 +1,10 @@
 """
 Threat Hunting — credential/IP search, multi-service attackers, campaign preview.
 
-SECURITY: search results render attacker-supplied username/password values
-pulled straight from login_attempts. Rendered exclusively via st.dataframe,
-which treats cell contents as plain text — never markdown, never
-unsafe_allow_html — per HONEYSHIELD_PROJECT.md section 6 point 3.
+SECURITY: this page renders attacker-supplied username/password values pulled
+straight from login_attempts. They go exclusively through theme.table /
+st.dataframe, which treat cell contents as plain text — never markdown, never a
+raw-HTML sink — per HONEYSHIELD_PROJECT.md section 6 point 3.
 
 Phase 5 wires this page to the correlation engine
 (honeypot/detectors/async_detection.py's multi-service check and
@@ -24,8 +24,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from dashboard import theme
-from dashboard import data
+from dashboard import data, theme
 from dashboard.login import require_auth
 
 st.set_page_config(page_title="HoneyShield — Threat Hunting", page_icon="🔍", layout="wide")
@@ -40,9 +39,26 @@ theme.page_header(
     eyebrow="Investigate",
 )
 
-# Why this page exists, stated up front. Without it the page reads as three
-# empty search boxes, which is exactly the complaint it should pre-empt.
-with st.expander("How to use this page", expanded=False):
+_d = data.hunting_context()
+creds = _d["credentials"]
+total_attempts = creds["total"]
+
+# ── What is searchable ────────────────────────────────────────────────────
+# The page used to open on three empty boxes with no indication of what the
+# corpus contained — you cannot hunt through something whose shape you cannot
+# see. These answer "is there anything here?" before any term is typed.
+theme.kpis([
+    {"label": "Credentials", "value": total_attempts, "note": "captured attempts",
+     "tone": theme.ACCENT},
+    {"label": "Usernames", "value": creds["unique_usernames"], "note": "distinct values",
+     "tone": "#4A9EFF"},
+    {"label": "Passwords", "value": creds["unique_passwords"], "note": "distinct values",
+     "tone": "#A78BFA"},
+    {"label": "Sources", "value": creds["unique_sources"], "note": "IPs that tried a login",
+     "tone": theme.MUTED},
+])
+
+with st.expander("How to use this page"):
     st.markdown(
         """
 **Search captured credentials** — every username and password submitted to the
@@ -50,7 +66,7 @@ honeypot is stored verbatim. Search it to answer questions like:
 
 - *Is a password from a known breach being sprayed at me?* Search the password.
 - *Is anyone targeting a real account name from my org?* Search the username.
-- *What is the most common credential pair?* Leave the box empty and browse.
+- *What is being tried most?* The rankings below answer that with no search at all.
 
 **Search attacker IPs** — substring matching, so `35.227` finds an entire
 range. Useful for spotting whether one provider or subnet is responsible for
@@ -67,39 +83,57 @@ look like unrelated visitors if you only ever looked at individual IPs.
 """
     )
 
+# ── Most-tried credentials ────────────────────────────────────────────────
+theme.section(
+    "Most-tried credentials",
+    "What attackers are actually guessing, ranked by attempt count. `sources` "
+    "separates one persistent host from a distributed attempt at the same value.",
+)
+
+if total_attempts:
+    left, right = st.columns(2, gap="medium")
+    with left:
+        theme.subsection("Usernames")
+        theme.table(pd.DataFrame(creds["top_usernames"]),
+                    columns=("value", "attempts", "sources"))
+    with right:
+        theme.subsection("Passwords")
+        theme.table(pd.DataFrame(creds["top_passwords"]),
+                    columns=("value", "attempts", "sources"))
+else:
+    theme.empty_state(
+        "🔑",
+        "No credentials captured yet — nothing to hunt through",
+        "This becomes useful the moment something tries to log in. Every visitor so "
+        "far connected and left without submitting a credential, which is "
+        "reconnaissance rather than intrusion. The Live Feed shows what they probed "
+        "for instead.",
+    )
+
 # ── Credential search ─────────────────────────────────────────────────────
 theme.section(
     "Search captured credentials",
-    "Substring match across captured usernames and passwords. Values are shown "
-    "exactly as received and are never interpreted as markup.",
+    "Substring match across usernames and passwords. Values are shown exactly as "
+    "received and are never interpreted as markup.",
 )
 
-# An empty substring matches every row, which is how we report the size of the
-# searchable corpus — "no matches" and "nothing to search" are different
-# answers and the empty states below distinguish them.
-_d = data.hunting_context()
-total_attempts = _d["total_attempts"]
-pattern = st.text_input("Username or password contains…", placeholder="e.g. admin, root, 123456")
+pattern = st.text_input("Username or password contains…",
+                        placeholder="e.g. admin, root, 123456",
+                        disabled=not total_attempts)
 
 if pattern:
     results = data.credential_search(pattern)
     if results:
-        theme.table(pd.DataFrame(results), height=380)
-        st.caption(f"{len(results)} matching login attempt(s).")
+        theme.table(pd.DataFrame(results), height=380,
+                    columns=("attempted_at", "ip_address", "username", "password", "service"))
+        st.caption(f"{len(results)} of {total_attempts} captured attempt(s) match.")
     else:
-        theme.empty_state("🕳️", "No matches",
-                          f"No captured credential contains that string. "
-                          f"{total_attempts} login attempt(s) have been captured in total.")
-elif total_attempts == 0:
-    theme.empty_state(
-        "🔑",
-        "No credentials captured yet — nothing to hunt through",
-        "This search becomes useful the moment something tries to log in. So far "
-        "every visitor has connected and left without submitting a credential, "
-        "which is reconnaissance rather than intrusion.",
-    )
-else:
-    st.caption(f"{total_attempts} login attempt(s) available to search. Enter a term above.")
+        theme.empty_state(
+            "🕳️", "No matches",
+            f"No captured credential contains that string. {total_attempts} attempt(s) "
+            "are searchable in total.")
+elif total_attempts:
+    st.caption(f"{total_attempts} attempt(s) searchable. Enter a term above.")
 
 # ── IP search ─────────────────────────────────────────────────────────────
 theme.section("Search attacker IPs",
@@ -109,13 +143,13 @@ ip_pattern = st.text_input("IP contains…", placeholder="e.g. 35.227")
 if ip_pattern:
     attackers = data.attackers(ip_pattern)
     if attackers:
-        adf = pd.DataFrame(attackers)
-        cols = [c for c in ("ip_address", "country", "isp", "asn", "threat_score",
-                            "verdict", "total_connections", "last_seen") if c in adf.columns]
-        theme.table(adf[cols])
-        st.caption(f"{len(attackers)} matching attacker(s).")
+        theme.table(pd.DataFrame(attackers),
+                    columns=("ip_address", "country", "isp", "asn", "threat_score",
+                             "verdict", "total_connections", "last_seen"))
+        st.caption(f"{len(attackers)} matching source(s).")
     else:
-        theme.empty_state("🕳️", "No matching IPs", "No captured source address contains that string.")
+        theme.empty_state("🕳️", "No matching IPs",
+                          "No captured source address contains that string.")
 
 # ── Multi-service ─────────────────────────────────────────────────────────
 theme.section(
@@ -124,19 +158,17 @@ theme.section(
     "clearest signal separating a deliberate actor from a single-port scanner.",
 )
 
-all_alerts = _d["alerts"]
-multi_service_alerts = [a for a in all_alerts if a["alert_type"] == "multi_service"]
+multi_service_alerts = [a for a in _d["alerts"] if a["alert_type"] == "multi_service"]
 if multi_service_alerts:
-    theme.table(pd.DataFrame([{"ip_address": a["ip_address"], "created_at": a["created_at"],
-                       "evidence": a["evidence"]} for a in multi_service_alerts]))
+    theme.table(pd.DataFrame(multi_service_alerts),
+                columns=("created_at", "ip_address", "severity", "evidence"))
 else:
     theme.empty_state(
         "🧭",
         "Empty by design on this deployment",
         "This detector needs two or more exposed services to correlate across. Only "
-        "the HTTP honeypot is deployed on the current platform — SSH, FTP and Telnet "
-        "are built and tested but not exposed — so it cannot fire yet. This is a "
-        "known scope decision, not a fault.",
+        "the HTTP honeypot is deployed — SSH, FTP and Telnet are built and tested "
+        "but not exposed — so it cannot fire yet. A known scope decision, not a fault.",
     )
 
 # ── Campaigns ─────────────────────────────────────────────────────────────
@@ -145,8 +177,9 @@ theme.section("ASN campaigns",
 
 campaigns = _d["campaigns"]
 if campaigns:
-    theme.table(pd.DataFrame(campaigns)[["asn", "attacker_count", "campaign_start",
-                                 "campaign_end", "severity"]])
+    theme.table(pd.DataFrame(campaigns),
+                columns=("asn", "attacker_count", "total_connections",
+                         "campaign_start", "campaign_end", "severity"))
     st.caption("Full member breakdown, with per-IP enrichment, is on the Campaigns page.")
 else:
     theme.empty_state(

@@ -121,14 +121,16 @@ def alerts(severity: Optional[str], acknowledged: Optional[bool]) -> dict:
 @st.cache_data(ttl=TTL, show_spinner=False)
 def hunting_context() -> dict:
     async def _load():
-        # count_login_attempts replaces fetching 500 rows purely to size the
-        # corpus — the page only ever displayed the number.
-        total, all_alerts, campaigns = await asyncio.gather(
-            db.count_login_attempts(),
+        # credential_stats replaces count_login_attempts here: it returns the
+        # same total plus the aggregates the page needs to show what is
+        # searchable, in the same single round trip.
+        creds, all_alerts, campaigns = await asyncio.gather(
+            db.credential_stats(),
             db.list_alerts(limit=500),
             detect_asn_campaigns(),
         )
-        return {"total_attempts": total, "alerts": all_alerts, "campaigns": campaigns}
+        return {"credentials": creds, "total_attempts": creds["total"],
+                "alerts": all_alerts, "campaigns": campaigns}
 
     return bridge_run(_load())
 

@@ -263,6 +263,25 @@ p, li, label, .stMarkdown {{ color: var(--text); }}
   border: 1px solid currentColor; background: rgba(255,255,255,.04);
 }}
 
+/* ── Bordered containers ──────────────────────────────────────────────── */
+/* st.container(border=True) ships a flat 1px box that reads as a different
+   material from every other panel. Styling it here means the alert queue and
+   the AI report card inherit the surface automatically. */
+[data-testid="stVerticalBlockBorderWrapper"] {{
+  background: linear-gradient(160deg, var(--surface) 0%, var(--surface-2) 100%);
+  border: 1px solid var(--border) !important; border-radius: 12px;
+  box-shadow: 0 14px 34px -24px rgba(0,0,0,.9);
+  transition: border-color .15s ease;
+}}
+[data-testid="stVerticalBlockBorderWrapper"]:hover {{ border-color: rgba(255,255,255,.13) !important; }}
+
+/* Expanders inside them (evidence payloads) should read as a quiet drawer. */
+[data-testid="stExpander"] details {{
+  border: 1px solid var(--border); border-radius: 9px; background: rgba(255,255,255,.018);
+}}
+[data-testid="stExpander"] summary {{ font-size: .8rem !important; color: var(--muted); }}
+[data-testid="stExpander"] summary:hover {{ color: var(--accent); }}
+
 /* ── Sub-section heading ──────────────────────────────────────────────── */
 /* Below theme.section() in the hierarchy — for the two or three panels that
    sit inside one section. Replaces ad-hoc "##### Title" markdown, which
@@ -703,6 +722,26 @@ def subsection(title: str) -> None:
     st.markdown(f'<div class="hs-sub-head">{esc(title)}</div>', unsafe_allow_html=True)
 
 
+def badge(text: str, level: Optional[str] = None, detail: str = "") -> None:
+    """
+    A severity pill, optionally followed by a plain-text detail.
+
+    Replaces the coloured-circle emoji (🔴🟠🟡🔵) used for severity: those are
+    clip art at text size, carry no relationship to the palette every other
+    element uses, and are invisible to anyone who reads by colour name rather
+    than glyph. The pill takes its colour from SEVERITY, so a MEDIUM alert is
+    the same amber here as in a table, a meter and a composition bar.
+    """
+    tone = severity_tone(level or text)
+    extra = (f'<span style="color:{MUTED};font-size:.86rem;margin-left:.6rem">'
+             f"{esc(detail)}</span>") if detail else ""
+    st.markdown(
+        f'<div style="margin:.1rem 0 .35rem">'
+        f'<span class="hs-badge" style="color:{esc(tone)}">{esc(text)}</span>{extra}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def facts(items: dict) -> None:
     """
     A label/value card — a definition list, not a table.
@@ -825,6 +864,9 @@ _COLUMNS = {
     "username":          ("Username", "text", "medium"),
     "password":          ("Password", "text", "medium"),
     "hits":              ("Hits", "int", "small"),
+    "value":             ("Value", "text", "medium"),
+    "attempts":          ("Attempts", "int", "small"),
+    "sources":           ("Sources", "int", "small"),
     "cnt":               ("Count", "int", "small"),
     "id":                ("ID", "int", "small"),
     "connection_id":     ("Conn", "int", "small"),

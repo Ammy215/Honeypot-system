@@ -217,6 +217,7 @@ def escapes_hostile_input():
             theme.meter(payload, None, note=payload)
             theme.auth_brand(payload, payload)
             theme.composition([{"label": payload, "value": 1, "color": payload}])
+            theme.badge(payload, level=payload, detail=payload)
         blob = " ".join(emitted)
         check(f"payload never emitted raw: {payload[:24]!r}", payload in blob, False)
         check_true(f"payload appears HTML-escaped instead: {payload[:24]!r}",
