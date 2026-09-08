@@ -950,29 +950,67 @@ class AsyncDatabase:
 
         await self._run_sqlite(_work)
 
-    async def service_breakdown(self) -> list:
-        query = "SELECT service, COUNT(*) AS cnt FROM connections GROUP BY service ORDER BY cnt DESC"
+    async def service_breakdown(self, hours: Optional[int] = None) -> list:
+        """
+        Connections per service. `hours` restricts to a trailing window.
+
+        The window exists because this sits beside a windowed timeline on the
+        Analytics page. Counting all time there was silently wrong: moving the
+        window slider changed the timeline and left this panel untouched, so
+        the two disagreed with no indication that they measured different
+        spans. `None` keeps the all-time behaviour for any other caller.
+        """
+        where, params = "", []
+        if hours is not None:
+            if self.backend == "postgres":
+                where = "WHERE connected_at >= now() - make_interval(hours => $1::int)"
+                params = [hours]
+            else:
+                where = "WHERE connected_at >= datetime('now', '-' || ? || ' hours')"
+                params = [hours]
+        query = (f"SELECT service, COUNT(*) AS cnt FROM connections {where} "
+                 f"GROUP BY service ORDER BY cnt DESC")
+
         if self.backend == "postgres":
             async with self._pg_pool.acquire() as conn:
-                rows = await conn.fetch(query)
+                rows = await conn.fetch(query, *params)
                 return [dict(r) for r in rows]
 
         def _work(conn: sqlite3.Connection):
             conn.row_factory = sqlite3.Row
-            return [dict(r) for r in conn.execute(query).fetchall()]
+            return [dict(r) for r in conn.execute(query, params).fetchall()]
 
         return await self._run_sqlite(_work)
 
-    async def verdict_breakdown(self) -> list:
-        query = "SELECT verdict, COUNT(*) AS cnt FROM attackers WHERE verdict IS NOT NULL GROUP BY verdict"
+    async def verdict_breakdown(self, hours: Optional[int] = None) -> list:
+        """
+        Attackers per verdict. `hours` restricts to those seen in the window.
+
+        Note the unit differs from service_breakdown: this counts ATTACKERS,
+        that counts CONNECTIONS. The two are rendered side by side, so the UI
+        must label which is which — the numbers legitimately disagree.
+
+        Windowing uses last_seen, since an attacker has no single timestamp;
+        "active in the last N hours" is the question a window implies here.
+        """
+        clause, params = "WHERE verdict IS NOT NULL", []
+        if hours is not None:
+            if self.backend == "postgres":
+                clause += " AND last_seen >= now() - make_interval(hours => $1::int)"
+                params = [hours]
+            else:
+                clause += " AND last_seen >= datetime('now', '-' || ? || ' hours')"
+                params = [hours]
+        query = f"SELECT verdict, COUNT(*) AS cnt FROM attackers {clause} GROUP BY verdict"
+
         if self.backend == "postgres":
             async with self._pg_pool.acquire() as conn:
-                rows = await conn.fetch(query)
+                rows = await conn.fetch(query, *params)
                 return [dict(r) for r in rows]
 
         def _work(conn: sqlite3.Connection):
             conn.row_factory = sqlite3.Row
-            return [dict(r) for r in conn.execute(query).fetchall()]
+            return [dict(r) for r in conn.execute(query, params).fetchall()]
 
         return await self._run_sqlite(_work)
 

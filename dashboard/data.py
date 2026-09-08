@@ -91,8 +91,11 @@ def analytics(hours: int) -> dict:
     async def _load():
         timeline, services, verdicts, top = await asyncio.gather(
             db.connections_timeline(hours=hours),
-            db.service_breakdown(),
-            db.verdict_breakdown(),
+            # Windowed to match the timeline. Left unwindowed, the composition
+            # panels silently reported all time while the chart beside them
+            # reported `hours`, and the slider appeared to do nothing to them.
+            db.service_breakdown(hours),
+            db.verdict_breakdown(hours),
             db.list_attackers(limit=10),
         )
         return {"timeline": timeline, "services": services,

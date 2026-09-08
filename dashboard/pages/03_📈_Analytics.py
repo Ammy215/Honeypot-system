@@ -59,21 +59,37 @@ theme.section("Connections over time",
               f"Captured sessions per bucket across the last {hours} hour(s).")
 
 if timeline:
+    # The query groups by hour and returns ONLY hours that had connections, so
+    # quiet hours are absent rather than zero. Plotly then sizes each bar from
+    # the spacing between the points it was given: two hits 9 hours apart drew
+    # two 9-hour-wide blocks, reading as sustained traffic when the truth was
+    # two isolated requests. Reindexing onto a complete hourly range restores
+    # the real shape — one narrow bar per hour, zeros in between.
     df = pd.DataFrame(timeline)
-    # Bars, not an area. Connections are discrete events counted per bucket;
-    # an area chart draws a filled slope between two samples, implying traffic
-    # that was never observed. With sparse honeypot data that reads as a
-    # continuous stream when the truth is a handful of isolated hits.
+    df["bucket"] = pd.to_datetime(df["bucket"], utc=True)
+    end = pd.Timestamp.now(tz="UTC").ceil("h")
+    full = pd.date_range(end=end, periods=hours + 1, freq="h")
+    df = (df.set_index("bucket")["cnt"]
+            .reindex(full, fill_value=0)
+            .rename_axis("bucket").reset_index(name="cnt"))
+
     fig = px.bar(df, x="bucket", y="cnt", labels={"bucket": "", "cnt": ""})
     fig.update_traces(
         marker=dict(color=theme.ACCENT, line=dict(width=0)),
+        # One hour wide, stated in milliseconds, so a bar means exactly its
+        # bucket rather than whatever gap happens to sit beside it.
+        width=3600 * 1000 * 0.8,
         hovertemplate="%{x|%d %b %H:%M}<br><b>%{y}</b> connection(s)<extra></extra>",
     )
+    peak = int(df["cnt"].max())
     fig.update_layout(
-        bargap=.35,
-        yaxis=dict(rangemode="tozero", tickformat="d", dtick=1 if max(df["cnt"]) <= 6 else None,
+        bargap=0,
+        yaxis=dict(rangemode="tozero", tickformat="d",
+                   dtick=1 if peak <= 6 else None, range=[0, max(1, peak) * 1.15],
                    title=dict(text="connections", font=dict(size=11))),
-        xaxis=dict(showgrid=False, tickformat="%d %b\n%H:%M"),
+        # Pin the axis to the window that was actually asked for. Auto-ranging
+        # to the data made a 24h window render a ~36h span.
+        xaxis=dict(showgrid=False, range=[full[0], full[-1]], tickformat="%d %b\n%H:%M"),
     )
     theme.plot(fig, height=280)
     st.caption(
@@ -91,12 +107,17 @@ else:
     )
 
 # ── Composition ───────────────────────────────────────────────────────────
-theme.section("Composition", "How captured traffic breaks down by service and by verdict.")
+theme.section(
+    "Composition",
+    f"Both panels cover the same {hours}-hour window as the timeline above, but "
+    f"they count different things — sessions on the left, distinct attackers on "
+    f"the right — so the totals are not meant to match.",
+)
 
 left, right = st.columns(2, gap="medium")
 
 with left:
-    theme.subsection("By service")
+    theme.subsection("Sessions by service")
     if services:
         # A donut of one category is a filled circle conveying nothing, and
         # only HTTP is deployed — so the common case for this panel is exactly
@@ -108,11 +129,11 @@ with left:
             for i, row in enumerate(sorted(services, key=lambda r: -r["cnt"]))
         ])
         st.caption(
-            f"All {service_total} captured session(s) are HTTP — the only service "
-            "exposed on this deployment. SSH, FTP and Telnet are built and tested "
-            "but deliberately not deployed."
+            f"All {service_total} session(s) in this window are HTTP — the only "
+            "service exposed on this deployment. SSH, FTP and Telnet are built and "
+            "tested but deliberately not deployed."
             if len(services) == 1 else
-            "Distribution across the exposed honeypot services."
+            f"{service_total} session(s) across the exposed honeypot services."
         )
     else:
         theme.empty_state("🧩", "No service data",
@@ -120,7 +141,7 @@ with left:
                           "to break down.")
 
 with right:
-    theme.subsection("By verdict")
+    theme.subsection("Attackers by verdict")
     if verdicts:
         # Ordered by severity rather than by count, so the axis reads as a
         # scale. Plotly sorts categories by first appearance otherwise, which
@@ -132,16 +153,20 @@ with right:
              "color": theme.SEVERITY[v]}
             for v in order if by_verdict.get(v, 0)
         ])
-        st.caption("Verdict is derived from the weighted threat score: "
-                   "LOW below 25, MEDIUM to 50, HIGH to 80, CRITICAL above.")
+        st.caption(
+            f"{sum(by_verdict.values())} attacker(s) active in this window, by "
+            "verdict. Derived from the weighted threat score: LOW below 25, "
+            "MEDIUM to 50, HIGH to 80, CRITICAL above.")
     else:
         theme.empty_state("⚖️", "No scored attackers",
                           "Scoring runs the moment an IP is captured and enriched.")
 
 # ── Volume leaders ────────────────────────────────────────────────────────
-theme.section("Most active sources",
-              "Ranked by captured sessions. Volume alone is not severity — a noisy "
-              "scanner can outrank a targeted probe.")
+theme.section(
+    "Most active sources",
+    "Ranked by each source's ALL-TIME session count, not the window above — "
+    "total_connections is a lifetime counter on the attacker record. Volume alone "
+    "is not severity: a noisy scanner can outrank a targeted probe.")
 
 if top:
     adf = pd.DataFrame(top).sort_values("total_connections", ascending=True)
@@ -170,14 +195,14 @@ if top:
     fig.update_layout(
         bargap=.42,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, title=None),
-        xaxis=dict(showgrid=True, rangemode="tozero", tickformat="d",
+        xaxis=dict(showgrid=True, rangemode="tozero", tickformat="d", dtick=1,
                    range=[0, max(adf["total_connections"]) * 1.18]),
         yaxis=dict(showgrid=False,
                    tickfont=dict(family="JetBrains Mono, monospace", size=11)),
     )
     theme.plot(fig, height=max(230, 44 * len(adf) + 60))
     st.caption("Bars are coloured by verdict, so a long green bar reads as noisy "
-               "scanning while a short red one is a signal worth opening. Volume "
+               "scanning while a short amber or red one is worth opening. Volume "
                "alone is not severity.")
 else:
     theme.empty_state("🏷️", "No sources yet",
