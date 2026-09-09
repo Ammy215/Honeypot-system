@@ -57,6 +57,25 @@ class HTTPHoneypot(AsyncHoneypotService):
         headers = self._parse_headers(request_data) if request_data else {}
         ip_address, forwarded_raw = resolve_client_ip(headers, peer_ip)
 
+        # Parsed once, here, and reused by every branch below. The filter branch
+        # used to run its own inline copy of this, which is exactly the drift
+        # this file warns about further down — two parsers on one untrusted
+        # input eventually disagree, and then the stored row stops matching the
+        # routing decision that produced it.
+        req_method, req_path = self._request_line(request_data)
+
+        # The health endpoint short-circuits ABOVE both recording branches, and
+        # that placement is the whole point rather than an accident of ordering.
+        # An uptime monitor reaches us through the load balancer and so arrives
+        # WITH a forwarding header — below this line it would be written to
+        # `connections` as an attacker. The platform's own internal checker
+        # arrives WITHOUT one and would be written to `filtered_connections`.
+        # Only a check that precedes both keeps the endpoint truly invisible to
+        # capture, which is the single property it has to have.
+        if self._is_health_check(req_method, req_path):
+            await self._send_health(writer, req_method)
+            return
+
         # Infrastructure noise: behind a proxy, anything arriving without a
         # forwarding header bypassed the load balancer, which in practice means
         # a platform health check. Recording those in attackers/connections would
@@ -73,19 +92,13 @@ class HTTPHoneypot(AsyncHoneypotService):
             and config.IGNORE_UNFORWARDED_CONNECTIONS
             and not forwarded_raw
         ):
-            filtered_method, filtered_path = None, None
-            if request_data:
-                first_line = request_data.split("\n", 1)[0].strip().split()
-                if len(first_line) >= 2:
-                    filtered_method, filtered_path = first_line[0].upper(), first_line[1]
-
             self.spawn_background(db.record_filtered_connection(
                 peer_ip=peer_ip, service="http", port=self.port,
-                method=filtered_method, path=filtered_path,
+                method=req_method, path=req_path,
             ))
             self.logger.debug(
                 f"Filtered unforwarded connection from {peer_ip} "
-                f"(method={filtered_method}, path={filtered_path})"
+                f"(method={req_method}, path={req_path})"
             )
             await self._send_html(writer, 200, self._not_found_html())
             return
@@ -95,12 +108,11 @@ class HTTPHoneypot(AsyncHoneypotService):
         else:
             self.logger.info(f"HTTP connection from {ip_address}:{address[1]}")
 
-        # Parse the request line here, before the connection row is written, so
-        # what was actually asked for is stored on the row itself. Recording only
-        # that someone connected cannot distinguish a scanner fingerprinting the
-        # host from one hunting for an exposed `.env` or a known CMS exploit
-        # path — and that distinction is most of the intel value.
-        req_method, req_path = self._request_line(request_data)
+        # req_method/req_path were parsed above, before the connection row is
+        # written, so what was actually asked for is stored on the row itself.
+        # Recording only that someone connected cannot distinguish a scanner
+        # fingerprinting the host from one hunting for an exposed `.env` or a
+        # known CMS exploit path — and that distinction is most of the intel value.
         req_user_agent = self._clip(headers.get("user-agent"), MAX_USER_AGENT_LEN)
 
         connection_id = await db.record_connection(
@@ -145,6 +157,53 @@ class HTTPHoneypot(AsyncHoneypotService):
             await self._send_html(writer, 404, self._not_found_html())
 
         self._log_closed(ip_address, start_time)
+
+    @staticmethod
+    def _is_health_check(method: Optional[str], path: Optional[str]) -> bool:
+        """
+        True only for a real ping at exactly the configured health path.
+
+        Deliberately strict on all three axes, because every relaxation here is
+        a way to make traffic disappear from the capture tables:
+
+        - EXACT path match, not a prefix. `/admin` matches by prefix so that
+          `/admin/config.php` is still captured; the same rule here would mean
+          `/_health/../wp-login.php` and `/_healthz-and-then-some` silently
+          escape logging.
+        - Query string ignored, since monitors routinely append cache-busting
+          parameters, but nothing else about the path is normalised — a path
+          that merely decodes to the health path is not the health path.
+        - GET and HEAD only. A POST to this path is not a health check, it is
+          somebody probing the endpoint, and that is intel worth keeping.
+
+        Anything failing any of these falls through to full normal capture,
+        so the failure direction is always "log it", never "drop it".
+        """
+        if not config.HEALTH_CHECK_PATH:
+            return False
+        if method not in ("GET", "HEAD") or not path:
+            return False
+        return path.split("?", 1)[0].split("#", 1)[0] == config.HEALTH_CHECK_PATH
+
+    async def _send_health(self, writer: asyncio.StreamWriter, method: Optional[str]):
+        """
+        Answer a ping and nothing else — no DB call, no enrichment, no detection.
+
+        The body is deliberately bland. It carries the same Apache server header
+        as every other response so the endpoint does not stand out from the
+        decoy surface as the one honest thing on the host.
+        """
+        body = b"" if method == "HEAD" else b"ok\n"
+        response = (
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: text/plain\r\n"
+            f"Content-Length: {len(b'ok') + 1}\r\n"
+            f"Server: {SERVER_HEADER}\r\n"
+            "Cache-Control: no-store\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+        ).encode("utf-8") + body
+        await self.send_safe(writer, response)
 
     def _log_closed(self, ip_address: str, start_time: float, note: str = ""):
         duration = time.monotonic() - start_time

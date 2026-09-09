@@ -267,9 +267,69 @@ sparse table here is the expected result, not a broken pipeline.
   cold start (~1 min) and the very first request may be lost, so a quiet stretch
   in the data is not automatically evidence of no attacker activity.
 
-## Deferred until after §7 succeeds
+## 9. Keeping the service awake — `GET /_health` and an uptime monitor
 
-A lightweight `GET /_health` endpoint (200 immediately, no logging/enrichment,
-invisible in `attackers`/`connections`) for an external uptime monitor. Decided,
-not built — build only once real validation-window data shows it's actually
-needed, not speculatively.
+Built ahead of its original schedule, and the reason is worth recording. This
+was deferred until after a successful §7 window, on the principle of not
+building speculatively. The first real look at the data inverted that: over 72
+hours the service had recorded traffic in only **six one-hour buckets**, in
+two-hour bursts separated by 12–24 hours of complete silence — no attacker
+traffic *and no platform health checks either*, which is the tell, since those
+are constant while the instance is awake. Measured cold-start cost was **32.9s
+to first byte, against 0.49s once warm**. The instance was asleep for the large
+majority of the window, so the window was not measuring what it claimed to. The
+endpoint stopped being polish and became the blocker.
+
+**What it does.** `GET /_health` (path configurable via `HEALTH_CHECK_PATH`)
+returns `200 ok` and writes nothing anywhere. The check sits *above* both
+recording branches in `handle_connection`, which is the load-bearing detail: an
+external monitor arrives through the load balancer **with** a forwarding header
+and would otherwise be written to `connections` as an attacker, while Render's
+internal checker arrives **without** one and would be written to
+`filtered_connections`. Only a check preceding both is invisible to capture.
+
+**What it deliberately does not do.** It matches the path *exactly* and only for
+`GET`/`HEAD`. Decoy paths match by prefix so `/admin/config.php` is still
+captured; the same rule here would let `/_health/../wp-login.php`, `/_healthz`
+or a credential `POST` to `/_health` escape logging. Everything that is not
+precisely this path and method falls through to full normal capture — the
+failure direction is always "log it", never "drop it". Covered by
+`tests/test_health_endpoint.py` (29 checks), which asserts the negative: after
+27 pings, every capture table holds exactly the row count it started with.
+
+### 9a. Repoint Render's own health check
+
+Render's internal checker was pointed at **`/admin` — a decoy path** — firing
+roughly every 5 seconds. That alone generated the ~2,500 rows in
+`filtered_connections`. In the Render dashboard: **Settings → Health Check Path
+→ `/_health`**. This does not keep the service awake (internal checks don't
+count as inbound traffic) but it stops the self-inflicted noise.
+
+### 9b. UptimeRobot — the part that actually keeps it awake
+
+Free, no card required. **Point it at `/_health` and never at a decoy path** —
+a monitor on `/admin` would manufacture an attacker row every 5 minutes and
+poison the dataset the honeypot exists to collect.
+
+1. Sign up at <https://uptimerobot.com> (free tier: 50 monitors, 5-minute
+   interval — comfortably under Render's ~15-minute sleep threshold).
+2. **+ New monitor**
+   - Monitor type: **HTTP(s)**
+   - Friendly name: `HoneyShield keepalive`
+   - URL: `https://honeypot-system-9j9a.onrender.com/_health`
+   - Monitoring interval: **5 minutes**
+3. Leave alerting on if you want to know when the service dies; it is otherwise
+   harmless.
+4. Verify after ~15 minutes: the monitor shows 200s, and
+   `SELECT count(*) FROM connections WHERE connected_at > now() - interval '15 min'`
+   returns **0**. Both must be true — a green monitor with rows appearing means
+   it is pointed at the wrong path.
+
+Note the tradeoff being accepted, stated honestly: this is one path on the host
+that is not a trap, and a `GET` of it is genuinely invisible — that is the
+feature, and it necessarily means an attacker who happens to request `/_health`
+leaves no row either. What that costs is small (a bland `200 ok`, carrying the
+same `Apache/2.4.41` header as every other response, revealing nothing) and it
+is bounded: any *variation* — `POST /_health`, `/_healthz`, `/_health/sub` — is
+captured in full, so the blind spot is exactly one method-and-path pair and
+cannot be widened into a general logging bypass.

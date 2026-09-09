@@ -66,6 +66,26 @@ IGNORE_UNFORWARDED_CONNECTIONS = (
     os.getenv("IGNORE_UNFORWARDED_CONNECTIONS", "false").lower() == "true"
 )
 
+# The one path that answers a ping and records absolutely nothing — no row in
+# connections, filtered_connections or attackers, no enrichment, no detection.
+#
+# It exists because a free-tier PaaS sleeps after ~15 minutes without inbound
+# traffic, and a sleeping honeypot cannot be probed: the deployment was awake
+# for roughly two hours a day, so the capture window was mostly fictional. An
+# external uptime monitor keeps it warm, but only if the monitor's own traffic
+# is invisible to capture — otherwise the dataset fills with a few thousand
+# self-inflicted rows a day and the real signal is buried again.
+#
+# Matched EXACTLY (query string aside), never by prefix, and only for GET/HEAD.
+# Decoy paths deliberately match by prefix so /admin/anything is still captured;
+# doing that here would hand an attacker a logging bypass — /_health/../wp-login
+# or a POST of credentials to /_health would vanish. Everything that is not
+# precisely this path and method falls through to full normal capture.
+#
+# Set empty to disable the endpoint entirely and restore pure honeypot
+# behaviour on every path.
+HEALTH_CHECK_PATH = os.getenv("HEALTH_CHECK_PATH", "/_health").strip()
+
 # ── Database (v1, legacy dashboard/auth — unchanged) ─────
 DATABASE_PATH = "data/honeypot.db"
 
