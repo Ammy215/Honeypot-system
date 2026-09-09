@@ -419,7 +419,7 @@ p, li, label, .stMarkdown {{ color: var(--text); }}
 .hs-kpi:hover {{ transform: translateY(-2px); border-color: rgba(255,255,255,.13); }}
 .hs-kpi .hs-k-value.hs-k-word {{ font-size: 1.3rem; letter-spacing: .02em; font-weight: 600; }}
 
-/* Inline status dot for word-valued KPIs (ONLINE / IDLE / STALE). */
+/* Inline status dot for word-valued KPIs, e.g. sensor state. */
 .hs-dot {{
   display: inline-block; width: 8px; height: 8px; border-radius: 50%;
   background: currentColor; margin-right: .5rem; vertical-align: middle;

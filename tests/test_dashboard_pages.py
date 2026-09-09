@@ -236,8 +236,14 @@ def test_live_feed_shows_filtered_panel():
     # the emitted markup instead of widget labels.
     for expected in ("Filtered total", "Last hour", "Last 24h", "Most recent"):
         check_true(f"KPI present: {expected}", expected in markup)
-    check_true("section heading present", "Filtered traffic" in markup)
+    check_true("section heading present", "Filtered noise" in markup)
     check_true("KPI cards use the design system", "hs-kpi" in markup)
+    # The panel must not sell itself as a liveness signal. It was treated as one
+    # until the platform health check moved to an endpoint that records nothing,
+    # at which point the table froze and the inference silently became false.
+    # Liveness is probed directly on Overview — see tests/test_sensor_liveness.py.
+    check_true("filtered panel does not claim to be a heartbeat",
+               "heartbeat" not in markup.lower() or "not a heartbeat" in markup.lower())
 
 
 def test_pages_read_through_the_cache():

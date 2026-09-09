@@ -92,22 +92,29 @@ else:
         "a dead sensor look identical here.",
     )
 
-# ── Filtered traffic ──────────────────────────────────────────────────────
+# ── Filtered noise ────────────────────────────────────────────────────────
+# Deliberately NOT a liveness signal. It was treated as one once — the platform's
+# health checker hit a decoy path on a fixed cadence, so a recent row here
+# implied a live listener. Repointing that checker at the no-op health endpoint
+# froze this table, and the inference silently became false. Sensor health on
+# the Overview page now probes the honeypot directly instead; this panel only
+# accounts for what was excluded from capture.
 theme.section(
-    "Filtered traffic",
-    "Connections dropped by IGNORE_UNFORWARDED_CONNECTIONS — no proxy header, in "
-    "practice the platform's own health checks. Kept out of the capture tables "
-    "above so they cannot pollute detection or scoring, but surfaced here so an "
-    "empty feed reads as 'genuinely quiet' rather than 'silently filtered'.",
+    "Filtered noise",
+    "Connections dropped by IGNORE_UNFORWARDED_CONNECTIONS — they arrived with no "
+    "proxy header, meaning they bypassed the load balancer. Recorded separately so "
+    "they cannot pollute detection or scoring, and shown here so a quiet feed reads "
+    "as 'genuinely quiet' rather than 'silently discarded'. This is an accounting "
+    "of what was excluded, not a heartbeat — Overview checks liveness directly.",
 )
 
 filtered = _d["filtered"]
 theme.kpis([
     {"label": "Filtered total", "value": filtered["total"], "note": "since deployment",
      "tone": theme.MUTED},
-    {"label": "Last hour", "value": filtered["last_hour"], "note": "probes", "tone": theme.MUTED},
-    {"label": "Last 24h", "value": filtered["last_24h"], "note": "probes", "tone": theme.MUTED},
-    {"label": "Most recent", "note": "probe timestamp", "tone": theme.MUTED,
+    {"label": "Last hour", "value": filtered["last_hour"], "note": "excluded", "tone": theme.MUTED},
+    {"label": "Last 24h", "value": filtered["last_24h"], "note": "excluded", "tone": theme.MUTED},
+    {"label": "Most recent", "note": "last exclusion", "tone": theme.MUTED,
      "value": filtered["latest"].strftime("%H:%M:%S") if filtered["latest"] else "—"},
 ])
 
@@ -120,10 +127,11 @@ if filtered["recent"]:
 elif filtered["total"] == 0:
     theme.empty_state(
         "🛡️",
-        "Nothing filtered yet",
-        "If this stays at zero while the service is up, the platform health check "
-        "is not reaching the honeypot at all — worth investigating, because it "
-        "also means you have no independent liveness signal.",
+        "Nothing filtered",
+        "No connection has arrived without a proxy header. Zero is a perfectly "
+        "healthy reading — it means nothing is bypassing the load balancer, and it "
+        "says nothing either way about whether the honeypot is up. Sensor health on "
+        "the Overview page answers that.",
     )
 
 # ── Alerts ────────────────────────────────────────────────────────────────

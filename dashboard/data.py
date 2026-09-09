@@ -29,6 +29,7 @@ from typing import Optional
 
 import streamlit as st
 
+from dashboard import sensor
 from dashboard.async_bridge import run as bridge_run
 from database.db_async import db
 from honeypot.detectors.async_correlation import detect_asn_campaigns, get_campaign_members
@@ -41,6 +42,21 @@ TTL = 20
 def refresh() -> None:
     """Drop every cached bundle so the next render re-reads the database."""
     st.cache_data.clear()
+
+
+# ── Sensor liveness ───────────────────────────────────────────────────────
+# Longer than TTL: this is a network round trip to another continent, not a
+# database read, and liveness does not change meaningfully between two page
+# clicks. Still short enough that a sensor going down surfaces within half a
+# minute. Cached here rather than in sensor.py so the sidebar's Refresh button,
+# which clears this module's caches, forces a genuine re-probe.
+SENSOR_TTL = 30
+
+
+@st.cache_data(ttl=SENSOR_TTL, show_spinner=False)
+def sensor_status() -> dict:
+    """Probe the honeypot's health endpoint. See dashboard/sensor.py."""
+    return sensor.probe()
 
 
 # ── Overview ──────────────────────────────────────────────────────────────

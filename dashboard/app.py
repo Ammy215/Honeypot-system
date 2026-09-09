@@ -9,7 +9,6 @@ Bound to 127.0.0.1 only — see .streamlit/config.toml.
 """
 
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -17,8 +16,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dashboard import theme
-from dashboard import data
+from dashboard import data, sensor, theme
 from dashboard.login import require_auth
 
 st.set_page_config(
@@ -60,42 +58,59 @@ theme.kpis([
 # ── Sensor health ─────────────────────────────────────────────────────────
 # The single most valuable thing this page can answer is "is the sensor alive?"
 # Without it, an empty feed is ambiguous: genuinely quiet, or silently down.
-# Platform health checks arrive on a fixed cadence, so their freshness is a
-# reliable liveness signal that is independent of attacker traffic.
+#
+# This asks the honeypot directly. It used to infer liveness from how recently
+# a row landed in filtered_connections — which broke silently the moment the
+# platform's health check was repointed at an endpoint that records nothing:
+# the table froze, and this panel reported a permanently STALE sensor for a
+# service that was healthy. A liveness signal has to test the property it
+# claims to report, not a side effect of someone else's configuration.
 theme.section(
     "Sensor health",
-    "Filtered probes are the platform's own health checks. They arrive on a fixed "
-    "cadence, so their freshness tells you the honeypot is alive and reachable — "
-    "independently of whether any attacker has found it.",
+    "The console requests the honeypot's health endpoint directly and reports "
+    "what came back. This is independent of attacker traffic, of capture volume, "
+    "and of how the platform happens to route its own health checks.",
 )
 
-latest = filtered.get("latest")
-if latest is not None:
-    if latest.tzinfo is None:
-        latest = latest.replace(tzinfo=timezone.utc)
-    age = (datetime.now(timezone.utc) - latest).total_seconds()
-    if age < 300:
-        status, tone, note = "ONLINE", theme.SEVERITY["LOW"], f"last probe {int(age)}s ago"
-    elif age < 3600:
-        status, tone, note = "IDLE", theme.SEVERITY["MEDIUM"], f"last probe {int(age // 60)}m ago"
-    else:
-        status, tone, note = "STALE", theme.SEVERITY["CRITICAL"], f"last probe {int(age // 3600)}h ago"
-else:
-    status, tone, note = "NO SIGNAL", theme.MUTED, "no probes recorded yet"
+probe = data.sensor_status()
+state = probe["state"]
+
+STATES = {
+    sensor.ONLINE: ("ONLINE", theme.SEVERITY["LOW"]),
+    sensor.WAKING: ("WAKING", theme.SEVERITY["MEDIUM"]),
+    sensor.DEGRADED: ("DEGRADED", theme.SEVERITY["HIGH"]),
+    sensor.UNREACHABLE: ("UNREACHABLE", theme.SEVERITY["CRITICAL"]),
+    sensor.UNCONFIGURED: ("NOT CHECKED", theme.MUTED),
+}
+status, tone = STATES.get(state, ("UNKNOWN", theme.MUTED))
 
 theme.kpis([
-    {"label": "Sensor status", "value": status, "note": note, "tone": tone, "dot": True},
-    {"label": "Probes filtered", "value": filtered["total"],
+    {"label": "Sensor status", "value": status, "note": probe["detail"],
+     "tone": tone, "dot": True},
+    {"label": "Response time", "tone": theme.MUTED, "note": "round trip to the honeypot",
+     "value": f"{probe['latency_ms']} ms" if probe["latency_ms"] is not None else "—"},
+    {"label": "Captured sessions", "value": summary["total_connections"],
+     "note": "real traffic, all time", "tone": theme.MUTED},
+    {"label": "Noise filtered", "value": filtered["total"],
      "note": "kept out of capture data", "tone": theme.MUTED},
-    {"label": "Last hour", "value": filtered["last_hour"], "note": "health checks", "tone": theme.MUTED},
-    {"label": "Last 24h", "value": filtered["last_24h"], "note": "health checks", "tone": theme.MUTED},
 ])
 
-if status == "STALE":
+if state == sensor.UNREACHABLE:
+    st.error(
+        "The honeypot did not answer. On a free tier this can be a cold start that "
+        "outlasted the probe timeout, so retry before assuming an outage — but if "
+        "it persists, the sensor is genuinely down and capturing nothing."
+    )
+elif state == sensor.DEGRADED:
     st.warning(
-        "No health-check probe in over an hour. On Render's free tier the service "
-        "sleeps after ~15 minutes idle, so this is usually expected — but if it "
-        "persists, check the deployment."
+        f"The honeypot answered with HTTP {probe['http_status']} instead of 200. It "
+        "is reachable, so this points at the application rather than the platform."
+    )
+elif state == sensor.UNCONFIGURED:
+    st.info(
+        "Set HONEYPOT_PUBLIC_URL in .env to the deployed honeypot's base URL and the "
+        "console will check liveness directly. Without it this panel cannot tell a "
+        "quiet honeypot from a dead one."
     )
 
 # ── Recent activity ───────────────────────────────────────────────────────

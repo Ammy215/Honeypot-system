@@ -86,6 +86,29 @@ IGNORE_UNFORWARDED_CONNECTIONS = (
 # behaviour on every path.
 HEALTH_CHECK_PATH = os.getenv("HEALTH_CHECK_PATH", "/_health").strip()
 
+# Where the dashboard probes to decide whether the sensor is alive.
+#
+# The console used to infer liveness from the freshness of filtered_connections,
+# on the reasoning that platform health checks arrive on a fixed cadence. That
+# inference died the moment HEALTH_CHECK_PATH went live: the platform's checker
+# now hits an endpoint that deliberately records nothing, so the table froze and
+# Overview reported a permanently STALE sensor for a perfectly healthy service.
+#
+# Reading a side effect was always the weaker design. This probes the honeypot
+# directly, which tests the actual property — "does it answer?" — and keeps
+# working no matter how health checks are routed. Leave empty to disable the
+# probe; the panel then says so rather than guessing.
+HONEYPOT_PUBLIC_URL = os.getenv("HONEYPOT_PUBLIC_URL", "").strip().rstrip("/")
+
+# A sleeping free-tier instance takes ~30s to cold-start, so a short timeout
+# would report DOWN for a service that is merely asleep. This is long enough to
+# ride out a wake-up, and the probe is cached so a page render pays it rarely.
+SENSOR_PROBE_TIMEOUT_SECONDS = float(os.getenv("SENSOR_PROBE_TIMEOUT_SECONDS", "35"))
+
+# Above this, a 200 means the instance answered but had to wake up first, which
+# is worth distinguishing from a healthy warm response.
+SENSOR_WAKING_THRESHOLD_SECONDS = float(os.getenv("SENSOR_WAKING_THRESHOLD_SECONDS", "5"))
+
 # ── Database (v1, legacy dashboard/auth — unchanged) ─────
 DATABASE_PATH = "data/honeypot.db"
 
