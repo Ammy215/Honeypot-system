@@ -6,9 +6,11 @@ Single admin account, argon2-hashed, lockout after repeated failures
 session store — nothing is written to disk or exposed to the client.
 """
 
+import importlib
 import logging
 import sys
 import threading
+import time
 from pathlib import Path
 
 import streamlit as st
@@ -18,7 +20,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from auth.async_admin_auth import authenticate, bootstrap_admin_if_needed, DEFAULT_ADMIN_USERNAME
-from dashboard import theme
+from dashboard import perf, theme
 from dashboard.async_bridge import run as bridge_run
 from database.db_async import db
 
@@ -39,25 +41,37 @@ def _run(coro):
 # ── Process warm-up ───────────────────────────────────────────────────────
 # Everything expensive about a cold dashboard process, measured:
 #
-#   connection pool (4 x TLS + SCRAM to a ~250 ms-RTT pooler) ... 3.6 s
-#   google.genai import (first visit to AI Analysis) ............ 4.5 s
-#   plotly.express import (first visit to Analytics) ............ ~1 s
+#   connection pool (5 x TLS + SCRAM to a ~250 ms-RTT pooler) ... ~3.6 s  network-bound
+#   pandas + pyarrow + the data layer ........................... ~2 s    CPU-bound
+#   plotly.express (Analytics) .................................. ~1 s    CPU-bound
 #
 # This used to run on the request path: the sign-in form waited on the pool —
 # 11 s to first paint on a fresh process — and the admin bootstrap query ran
 # again for EVERY new browser session (~0.5 s each) although it only ever needs
-# to happen once per process. Now it runs once, in the background, started by
-# the sign-in screen: the form paints immediately, and the cost is paid while
+# to happen once per process. Now each half runs once, in the background, while
 # the operator is typing a password instead of after they click.
+#
+# The two halves are started separately because they cost differently. The
+# pool is network-bound and can start whenever — run_dashboard.py starts it the
+# moment the process does. The imports are CPU-bound and contend for the GIL
+# with whatever the server is doing: started at process start, they were still
+# running when the first browser arrived and made its sign-in form 3.5 s
+# SLOWER (measured). So they begin only once a sign-in form has been sent.
 #
 # It performs no data queries on behalf of an unauthenticated visitor — only
 # the pool, the one-time admin bootstrap, and imports.
 _WARMED = threading.Event()
 _warm_lock = threading.Lock()
-_warm_started = False
+_db_warm_started = False
+_imports_warm_started = False
+
+# Long enough for the sign-in form to reach the browser before the imports
+# start competing for the GIL; invisible to anyone, who is still typing.
+IMPORT_WARM_UP_DELAY_SECONDS = 1.0
 
 
 def _warm_up_process() -> None:
+    started = time.perf_counter()
     try:
         _run(db.connect())
         _run(db.init_schema())
@@ -74,24 +88,64 @@ def _warm_up_process() -> None:
     except Exception:  # noqa: BLE001 — surfaced at sign-in, where it can be shown
         logger.exception("Dashboard warm-up could not reach the database")
     finally:
-        # Sign-in only needs the pool and the bootstrap, so it is released here
-        # rather than after the imports below.
         _WARMED.set()
-
-    try:
-        import plotly.express  # noqa: F401  (Analytics)
-        import honeypot.ai.async_analyst  # noqa: F401  (AI Analysis -> google.genai)
-    except Exception:  # noqa: BLE001 — a page will import it again and report properly
-        logger.exception("Dashboard warm-up could not preload page modules")
+        perf.event(f"warm-up: database ready for sign-in "
+                   f"{(time.perf_counter() - started) * 1000:.0f} ms after it started")
 
 
-def _start_warm_up() -> None:
-    global _warm_started
+# What pages import AFTER their auth gate, in the order a signed-in operator
+# needs them. Deliberately NOT google.genai: honeypot/ai/async_analyst.py now
+# imports it only when a report is actually generated, and preloading it here
+# (4.5 s of GIL-heavy work) is what slowed the first sign-in by 3.5 s.
+_PAGE_MODULES = ("pandas", "pyarrow", "dashboard.data", "plotly.express",
+                 "honeypot.ai.async_analyst")
+
+
+def _import_page_modules() -> None:
+    """
+    Load the pages' heavy modules in the background, while the form is shown.
+
+    Every page imports these below require_auth rather than at the top, and
+    that placement is measured, not stylistic. Above the gate, a freshly
+    started server had to import pandas, the data layer and — on AI Analysis —
+    google.genai before it could send even the SIGN-IN form: ~3-4 s on most
+    pages and 8 s on AI Analysis, for a screen that uses none of them. The auth
+    gate itself needs 81 ms of imports. Below the gate, the form goes out at
+    once and this thread loads the rest while the operator types; a page that
+    reaches its imports first simply waits on Python's import lock rather than
+    importing twice.
+
+    Its own thread, not the database one: imports are CPU-bound and pool
+    creation is network-bound, so running them side by side overlaps the two.
+    """
+    time.sleep(IMPORT_WARM_UP_DELAY_SECONDS)
+    for name in _PAGE_MODULES:
+        try:
+            importlib.import_module(name)
+        except Exception:  # noqa: BLE001 — the page will import it again and report properly
+            logger.exception(f"Dashboard warm-up could not preload {name}")
+
+
+def start_warm_up(*, imports: bool = True) -> None:
+    """
+    Start the once-per-process warm-up in the background; repeat calls no-op.
+
+    The database half always starts. The import half starts only when
+    `imports` is true — the sign-in screen passes that, having just sent its
+    form; run_dashboard.py does not, because at process start nothing has been
+    sent yet and the imports would compete with the first browser's request.
+    """
+    global _db_warm_started, _imports_warm_started
     with _warm_lock:
-        if _warm_started:
-            return
-        _warm_started = True
-    threading.Thread(target=_warm_up_process, name="hs-warmup", daemon=True).start()
+        start_db = not _db_warm_started
+        start_imports = imports and not _imports_warm_started
+        _db_warm_started = True
+        _imports_warm_started = _imports_warm_started or imports
+    if start_db:
+        threading.Thread(target=_warm_up_process, name="hs-warmup-db", daemon=True).start()
+    if start_imports:
+        threading.Thread(target=_import_page_modules, name="hs-warmup-imports",
+                         daemon=True).start()
 
 
 def show_login_page() -> bool:
@@ -99,7 +153,7 @@ def show_login_page() -> bool:
     Render the sign-in screen. Returns True if credentials were accepted in
     THIS run, in which case the caller carries straight on and draws the page.
     """
-    _start_warm_up()
+    start_warm_up()
 
     # The whole sign-in UI lives inside one placeholder so it can be removed
     # from the current frame the moment credentials are accepted.

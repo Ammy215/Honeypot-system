@@ -205,8 +205,9 @@ against Supabase using the `honeyshield_dashboard` role from
 DATABASE_URL=postgresql://honeyshield_dashboard.<project-ref>:<pw>@<pooler-host>:5432/postgres
 DB_SSL_MODE=require
 SKIP_SCHEMA_INIT=true
+HONEYPOT_PUBLIC_URL=https://<your-app>.onrender.com   # Sensor health probes <this>/_health
 
-streamlit run dashboard/app.py
+python run_dashboard.py        # or: streamlit run dashboard/app.py
 ```
 
 ## 7. Live validation window (24–48 h)

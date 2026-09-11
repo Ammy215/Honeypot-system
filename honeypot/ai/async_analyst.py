@@ -15,19 +15,25 @@ the model to report gaps as gaps, never invent detail to fill them.
 import asyncio
 import logging
 from datetime import datetime
-from typing import Dict, Optional
-
-from google import genai
-from google.genai import types
-from google.genai.errors import APIError
+from typing import TYPE_CHECKING, Dict, Optional
 
 import config
 from database.db_async import db
 from honeypot.detectors.async_correlation import detect_asn_campaigns
 
+# The Gemini SDK is imported on first USE, not at import time. It is the
+# heaviest dependency in the project — 4.5 s to import on a fresh process,
+# almost all of it pydantic building model classes — and importing it here put
+# that cost on every path that merely touched this module: the AI Analysis
+# page paid it just to render its attacker picker, and a dashboard warm-up that
+# preloaded it held the GIL long enough to slow the first sign-in by 3.5 s.
+# Only generating a report needs it, and that call takes seconds anyway.
+if TYPE_CHECKING:
+    from google import genai
+
 logger = logging.getLogger("honeypot.ai.analyst")
 
-_client: Optional[genai.Client] = None
+_client: Optional["genai.Client"] = None
 
 SYSTEM_PROMPT = (
     "You are a cybersecurity threat analyst writing a report for a SOC dashboard "
@@ -98,9 +104,12 @@ def is_available() -> bool:
     return bool(config.GEMINI_API_KEY) and config.GEMINI_API_KEY != "your_key_here"
 
 
-def _get_client() -> genai.Client:
+def _get_client() -> "genai.Client":
     global _client
     if _client is None:
+        from google import genai
+        from google.genai import types
+
         # 60s, not 30s: a typical report completes in ~6s, but a transient slow
         # response exceeded 30s during pre-deployment testing and surfaced as a
         # bare httpx.ReadTimeout. The extra headroom is free (the call returns as
@@ -221,6 +230,8 @@ async def generate_attacker_report(ip_address: str) -> Dict:
         attempts_made = attempt
         try:
             client = _get_client()
+            from google.genai import types  # first use pays the import; see top of module
+
             response = await client.aio.models.generate_content(
                 model=config.GEMINI_MODEL,
                 contents=context_text + "\n\nWrite the threat report now.",

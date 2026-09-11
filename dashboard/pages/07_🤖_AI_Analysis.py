@@ -17,13 +17,20 @@ _ROOT = str(Path(__file__).parent.parent.parent)
 if _ROOT not in sys.path:  # guarded: this line runs on every rerun
     sys.path.insert(0, _ROOT)
 
-from dashboard import data, theme
+from dashboard import theme
 from dashboard.async_bridge import run as bridge_run
 from dashboard.login import require_auth
-from honeypot.ai.async_analyst import RETRY_DELAYS, generate_attacker_report, is_available
 
 st.set_page_config(page_title="HoneyShield — AI Analysis", page_icon="🤖", layout="wide")
 require_auth("🤖", "AI Analysis")
+
+# Heavy imports sit below the auth gate on purpose — see dashboard/login.py.
+# This one most of all: async_analyst pulls in google.genai, 4.5 s on a fresh
+# process, and above the gate it made even the SIGN-IN form take 8 s here.
+from dashboard import data  # noqa: E402
+from honeypot.ai.async_analyst import (  # noqa: E402
+    RETRY_DELAYS, generate_attacker_report, is_available,
+)
 
 theme.page_header(
     "",

@@ -27,9 +27,11 @@ python -m venv .venv && .venv/Scripts/activate   # or source .venv/bin/activate 
 pip install -r requirements.txt
 cp .env.example .env   # fill in ABUSEIPDB_API_KEY / OPENAI_API_KEY / API_KEY_ENCRYPTION_SECRET
 python main.py                       # starts the honeypot listeners
-streamlit run dashboard/app.py       # starts the dashboard (localhost:8501)
+python run_dashboard.py              # starts the dashboard (localhost:8501)
 ```
 First run creates a default `admin` account and prints its one-time password to the console — it is never written to disk. Note the password immediately; there is no other way to retrieve it.
+
+`run_dashboard.py` is `streamlit run dashboard/app.py` plus a database-pool warm-up from process start (so the first sign-in after a restart doesn't wait on TLS handshakes); extra args pass through to Streamlit. Plain `streamlit run` still works. The source watcher is off (`.streamlit/config.toml`), so **restart the dashboard after editing code** — it will not hot-reload. Set `DASHBOARD_PERF_LOG=true` to log cache HIT/MISS and DB round trips.
 
 ## Testing
 No pytest suite yet (tracked as a follow-up phase). Current tests are standalone scripts under `tests/` — run each directly, e.g. `python tests/test_phase2.py`. `tests/test_complete_system.py` is a static environment/config health check, not a live integration test.

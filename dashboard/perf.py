@@ -55,6 +55,12 @@ def record(name: str, started: float) -> None:
         logger.info(f"{name:<24} {state} {ms:8.1f} ms")
 
 
+def event(message: str) -> None:
+    """Log a one-off milestone, e.g. the warm-up's database half finishing."""
+    if ENABLED:
+        logger.info(message)
+
+
 def network(label: str, started: float) -> None:
     """Log a real network round trip."""
     if ENABLED:

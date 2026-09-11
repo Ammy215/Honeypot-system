@@ -9,7 +9,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pandas as pd
 import streamlit as st
 
 _ROOT = str(Path(__file__).parent.parent.parent)
@@ -17,11 +16,15 @@ if _ROOT not in sys.path:  # guarded: this line runs on every rerun
     sys.path.insert(0, _ROOT)
 
 import config
-from dashboard import data, theme
+from dashboard import theme
 from dashboard.login import require_auth
 
 st.set_page_config(page_title="HoneyShield — Campaigns", page_icon="🎪", layout="wide")
 require_auth("🎪", "Campaigns")
+
+# Heavy imports sit below the auth gate on purpose — see dashboard/login.py.
+import pandas as pd  # noqa: E402
+from dashboard import data  # noqa: E402
 
 theme.page_header(
     "",

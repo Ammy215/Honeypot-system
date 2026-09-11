@@ -25,6 +25,10 @@ instrumentation), not guessed at:
   [8] The sign-in form waited on the DB pool (11 s to first paint on a cold
       process); now warmed in the background, off the request path.
   [9] Cache HIT/MISS is observable in the running server (DASHBOARD_PERF_LOG).
+ [10] Pages imported pandas / the data layer / google.genai ABOVE their auth
+      gate, so a fresh server made even the sign-in form wait 3-8 s on them.
+ [11] run_dashboard.py starts only the network-bound warm-up at process start;
+      the CPU-bound half, started there, made the first sign-in 3.5 s slower.
 
 Sections [3] live-check against the real database when DATABASE_URL is set in
 .env (read-only: SELECT 1, BEGIN/ROLLBACK). Everything else runs offline on a
@@ -123,9 +127,9 @@ def test_signin_same_run():
         await db.create_admin_user("admin", hash_password(TEST_PASSWORD))
     asyncio.run(seed())
 
-    # Warm-up is exercised separately in [8]; here it must not spawn a thread
-    # that imports google.genai while the test process is exiting.
-    login._warm_started = True
+    # Warm-up is exercised separately in [8]; here it must not spawn threads
+    # that are still importing while the test process exits.
+    login._db_warm_started = login._imports_warm_started = True
     login._WARMED.set()
 
     runs = {"n": 0}
@@ -315,7 +319,7 @@ def test_overview_overlaps():
 def test_warmup_off_request_path():
     section("[8] Sign-in form paints without waiting on the database")
 
-    login._warm_started = False
+    login._db_warm_started = login._imports_warm_started = False
     login._WARMED.clear()
     started = {"n": 0}
 
@@ -324,7 +328,8 @@ def test_warmup_off_request_path():
         time.sleep(3.0)                       # a cold pool, measured at 3.6 s
         login._WARMED.set()
 
-    with patch.object(login, "_warm_up_process", slow_warmup):
+    with patch.object(login, "_warm_up_process", slow_warmup), \
+         patch.object(login, "_import_page_modules", lambda: None):
         t = time.perf_counter()
         at = AppTest.from_file(str(APP), default_timeout=180)
         at.run()
@@ -372,6 +377,77 @@ def test_cache_hit_miss_logged():
     check("second call logged as HIT", len(lines) >= 2 and "HIT" in lines[1], str(lines))
 
 
+# ── [10] ──────────────────────────────────────────────────────────────────
+def test_heavy_imports_below_gate():
+    section("[10] The sign-in form never waits on a page's heavy imports")
+
+    # Above the gate, a fresh server imported pandas, the data layer and (on AI
+    # Analysis) google.genai before it could send the SIGN-IN form: 3-4 s on
+    # most pages, 8 s on AI Analysis. The gate itself needs ~80 ms.
+    heavy = {"pandas", "plotly", "dashboard.data", "honeypot.ai"}
+    for f in [APP] + PAGES:
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        gate = next(n.lineno for n in tree.body if isinstance(n, ast.Expr)
+                    and isinstance(n.value, ast.Call)
+                    and getattr(n.value.func, "id", "") == "require_auth")
+        early = []
+        for n in tree.body:
+            if n.lineno > gate or not isinstance(n, (ast.Import, ast.ImportFrom)):
+                continue
+            names = ([a.name for a in n.names] if isinstance(n, ast.Import)
+                     else [f"{n.module}.{a.name}" for a in n.names] + [n.module or ""])
+            early += [m for m in names if any(m == h or m.startswith(h + ".") for h in heavy)]
+        check(f"{f.stem}: nothing heavy imported above require_auth", not early, str(early))
+
+    analyst = ast.parse((REPO_ROOT / "honeypot" / "ai" / "async_analyst.py")
+                        .read_text(encoding="utf-8"))
+    top = [ast.unparse(n) for n in analyst.body
+           if isinstance(n, (ast.Import, ast.ImportFrom)) and "google" in ast.unparse(n)]
+    check("async_analyst does not import google.genai at module load", not top, str(top))
+    check("google.genai is not in the warm-up's preload list",
+          not any("genai" in m for m in login._PAGE_MODULES))
+
+
+# ── [11] ──────────────────────────────────────────────────────────────────
+def test_launcher():
+    section("[11] run_dashboard.py warms the pool early and hands off to Streamlit")
+
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("run_dashboard", REPO_ROOT / "run_dashboard.py")
+    launcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(launcher)          # guarded by __main__: must not start a server
+    check("importing the launcher does not start anything", True)
+
+    calls = {}
+
+    def fake_warm(**kw):
+        calls["warm"] = kw
+
+    def fake_cli():
+        calls["argv"] = list(sys.argv)
+        return 0
+
+    saved_argv, saved_cwd = list(sys.argv), os.getcwd()
+    sys.argv = ["run_dashboard.py", "--server.port", "8599"]
+    try:
+        import streamlit.web.cli as st_cli
+        with patch.object(login, "start_warm_up", fake_warm), \
+             patch.object(st_cli, "main", fake_cli):
+            rc = launcher.main()
+    finally:
+        sys.argv = saved_argv
+        os.chdir(saved_cwd)
+
+    check("launcher starts ONLY the network-bound half (imports=False)",
+          calls.get("warm") == {"imports": False}, str(calls.get("warm")))
+    argv = calls.get("argv", [])
+    check("hands off to `streamlit run dashboard/app.py`",
+          argv[:2] == ["streamlit", "run"] and argv[2:3]
+          and Path(argv[2]) == REPO_ROOT / "dashboard" / "app.py", str(argv))
+    check("passes streamlit options through", argv[-2:] == ["--server.port", "8599"], str(argv))
+    check("returns Streamlit's exit code", rc == 0)
+
+
 if __name__ == "__main__":
     try:
         test_watcher_disabled()
@@ -383,6 +459,8 @@ if __name__ == "__main__":
         test_overview_overlaps()
         test_warmup_off_request_path()
         test_cache_hit_miss_logged()
+        test_heavy_imports_below_gate()
+        test_launcher()
     finally:
         try:
             asyncio.run(db.close())

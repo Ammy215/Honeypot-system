@@ -185,10 +185,16 @@ ENABLED_SERVICES=HTTP python main.py
 ### Dashboard
 
 ```bash
-streamlit run dashboard/app.py
+python run_dashboard.py
 ```
 
-Visit `http://localhost:8501`. **Ctrl+C** to stop.
+Visit `http://localhost:8501`. **Ctrl+C** to stop. Any `streamlit run` option
+passes through (e.g. `python run_dashboard.py --server.port 8502`).
+
+`run_dashboard.py` is `streamlit run dashboard/app.py` with the database pool
+warming from the moment the process starts, so the first sign-in after a
+restart doesn't wait on connection handshakes; `streamlit run` still works.
+File watching is disabled for speed, so restart the dashboard after editing code.
 
 ### Tests
 

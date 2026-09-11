@@ -11,14 +11,13 @@ Bound to 127.0.0.1 only — see .streamlit/config.toml.
 import sys
 from pathlib import Path
 
-import pandas as pd
 import streamlit as st
 
 _ROOT = str(Path(__file__).parent.parent)
 if _ROOT not in sys.path:  # guarded: this line runs on every rerun
     sys.path.insert(0, _ROOT)
 
-from dashboard import data, sensor, theme
+from dashboard import theme
 from dashboard.login import require_auth
 
 st.set_page_config(
@@ -29,6 +28,11 @@ st.set_page_config(
 )
 
 require_auth("🍯", "Overview")
+
+# Heavy imports sit below the auth gate on purpose: see _import_page_modules
+# in dashboard/login.py for why, and for what loads them in the background.
+import pandas as pd  # noqa: E402
+from dashboard import data, sensor  # noqa: E402
 
 theme.page_header(
     "",
