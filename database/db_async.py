@@ -42,11 +42,36 @@ async def _decode_inet_as_text(conn):
     )
 
 
+async def _skip_session_reset(conn) -> None:
+    """
+    Release a connection to the pool without a server round trip.
+
+    asyncpg's default release runs `pg_advisory_unlock_all(); CLOSE ALL;
+    UNLISTEN *; RESET ALL;` — a full round trip, awaited before `async with
+    pool.acquire()` returns. Against this database that is ~256 ms, measured,
+    and it was being paid on EVERY query: a pooled query cost 510 ms where the
+    query itself took 251. Half of all database time in the dashboard was
+    resetting session state that nothing had set.
+
+    Safe because nothing here creates that state — no advisory locks, no
+    cursors outside transactions, no LISTEN, no SET (grep-verified; keep it that
+    way, and restore the default reset if you ever add one). The protection
+    that DOES matter is preserved: when a custom reset is supplied, asyncpg
+    still runs its internal Connection._reset() first, which rolls back any
+    open transaction before this is called. A connection can never be handed
+    to the next caller mid-transaction; tests/test_dashboard_performance.py
+    asserts exactly that against the live database.
+    """
+    return None
+
+
 class AsyncDatabase:
     def __init__(self):
         self.backend = "postgres" if config.DATABASE_URL else "sqlite"
         self._pg_pool = None
         self._sqlite_path = None
+        self._connect_lock = None
+        self._connect_lock_loop = None
 
         if self.backend == "sqlite":
             self._sqlite_path = Path(config.SQLITE_PATH)
@@ -65,6 +90,23 @@ class AsyncDatabase:
         if self._pg_pool is not None:
             return
 
+        # The check above is not enough on its own. Pool creation awaits several
+        # TLS handshakes, and while it does, a second caller on the same loop
+        # also sees _pg_pool is None and builds a SECOND pool; whichever assigns
+        # last wins and the other's connections are orphaned — four of the
+        # pooler's fifteen client slots, gone until the process exits. The
+        # dashboard now warms its pool in the background while a page may also
+        # be connecting, so the race is real. One lock per event loop (asyncio
+        # locks are loop-bound, and tests drive more than one loop).
+        loop = asyncio.get_running_loop()
+        if self._connect_lock is None or self._connect_lock_loop is not loop:
+            self._connect_lock, self._connect_lock_loop = asyncio.Lock(), loop
+        async with self._connect_lock:
+            if self._pg_pool is not None:
+                return
+            await self._open()
+
+    async def _open(self):
         if self.backend == "postgres":
             import asyncpg
             # TLS is required explicitly, not left to negotiation. asyncpg
@@ -84,18 +126,21 @@ class AsyncDatabase:
             #    same time hit "EMAXCONNSESSION: max clients reached".
             #
             # DB_POOL_SIZE (config.py, default 5) finally becomes the cap it
-            # always claimed to be. min_size is chosen empirically rather than
-            # by taste: a dashboard page issues four queries concurrently, so a
-            # pool that starts smaller than that pays TLS handshakes in the
-            # middle of a render. Measured, total time to first paint is the
-            # same either way (~3.7s, dominated by handshakes whenever they
-            # happen), but pre-opening four makes every SUBSEQUENT render
-            # 1077ms instead of 2415ms — and renders are the repeated cost.
-            min_size = min(4, config.DB_POOL_SIZE)
+            # always claimed to be. min_size matches the widest concurrent read:
+            # a dashboard bundle now issues up to FIVE queries at once (the
+            # multi-query readers gather their parts), and a pool that starts
+            # smaller opens the missing connection mid-render — 1.6 s of TLS +
+            # SCRAM, measured, landing on whichever page happens to need it
+            # first. Opening them all up front costs the operator nothing: the
+            # dashboard warms its pool in the background while the sign-in form
+            # is on screen (see dashboard/login.py). Capped at 5 regardless of
+            # DB_POOL_SIZE, because the pooler admits only 15 clients in total.
+            min_size = min(5, config.DB_POOL_SIZE)
             self._pg_pool = await asyncpg.create_pool(
                 config.DATABASE_URL,
                 ssl=config.DB_SSL_MODE,
                 init=_decode_inet_as_text,
+                reset=_skip_session_reset,
                 min_size=min_size,
                 max_size=config.DB_POOL_SIZE,
             )
@@ -292,8 +337,12 @@ class AsyncDatabase:
         empty = {"total": 0, "last_hour": 0, "last_24h": 0, "latest": None, "recent": []}
 
         if self.backend == "postgres":
-            async with self._pg_pool.acquire() as conn:
-                row = await conn.fetchrow(
+            # Two independent reads, issued together on separate pooled
+            # connections. Run one after the other on a single connection they
+            # cost two round trips — 540 ms measured, the long pole of both the
+            # Overview and Live Feed bundles. Gathered, they cost one.
+            row, recent = await asyncio.gather(
+                self._pg_pool.fetchrow(
                     """
                     SELECT count(*) AS total,
                            count(*) FILTER (WHERE filtered_at > now() - interval '1 hour')  AS last_hour,
@@ -301,8 +350,8 @@ class AsyncDatabase:
                            max(filtered_at) AS latest
                     FROM filtered_connections
                     """
-                )
-                recent = await conn.fetch(
+                ),
+                self._pg_pool.fetch(
                     """
                     SELECT host(peer_ip) AS peer_ip, service, port, method, path,
                            count(*) AS hits, max(filtered_at) AS latest
@@ -312,7 +361,8 @@ class AsyncDatabase:
                     LIMIT $1
                     """,
                     recent_limit,
-                )
+                ),
+            )
             if not row:
                 return empty
             return {**dict(row), "recent": [dict(r) for r in recent]}
@@ -1117,10 +1167,14 @@ class AsyncDatabase:
                    "GROUP BY {col} ORDER BY attempts DESC, value ASC LIMIT {lim}")
 
         if self.backend == "postgres":
-            async with self._pg_pool.acquire() as conn:
-                totals = await conn.fetchrow(totals_sql)
-                users = await conn.fetch(top_sql.format(col="username", lim=int(top_n)))
-                pwds = await conn.fetch(top_sql.format(col="password", lim=int(top_n)))
+            # Three independent aggregates, issued together. Sequential on one
+            # connection they were three round trips (917 ms measured, the long
+            # pole of Threat Hunting); gathered, one.
+            totals, users, pwds = await asyncio.gather(
+                self._pg_pool.fetchrow(totals_sql),
+                self._pg_pool.fetch(top_sql.format(col="username", lim=int(top_n))),
+                self._pg_pool.fetch(top_sql.format(col="password", lim=int(top_n))),
+            )
             if not totals:
                 return empty
             return {**dict(totals),

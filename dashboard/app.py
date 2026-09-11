@@ -14,7 +14,9 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+_ROOT = str(Path(__file__).parent.parent)
+if _ROOT not in sys.path:  # guarded: this line runs on every rerun
+    sys.path.insert(0, _ROOT)
 
 from dashboard import data, sensor, theme
 from dashboard.login import require_auth
@@ -37,9 +39,11 @@ theme.page_header(
     eyebrow="HoneyShield SOC",
 )
 
-# One gathered, cached read for the whole page — see dashboard/data.py for
-# why this is a bundle rather than four separate awaits.
-_d = data.overview()
+# One gathered, cached database read for the whole page (see dashboard/data.py
+# for why it is a bundle), overlapped with the sensor's HTTP health probe. The
+# two are independent and used to run back to back, so a cache miss cost their
+# sum — measured 765 ms + 964 ms. Run together, the page waits for the slower.
+_d, probe = data.concurrently(data.overview, data.sensor_status)
 summary, filtered = _d["summary"], _d["filtered"]
 
 theme.kpis([
@@ -72,7 +76,6 @@ theme.section(
     "and of how the platform happens to route its own health checks.",
 )
 
-probe = data.sensor_status()
 state = probe["state"]
 
 STATES = {

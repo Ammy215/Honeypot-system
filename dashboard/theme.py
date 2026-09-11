@@ -575,23 +575,30 @@ LOGO_SVG = (
 )
 
 
-def inject(authenticated: bool = True) -> None:
+def inject(authenticated: bool = True):
     """
     Apply the design system. Call once per page, before rendering anything.
 
-    `authenticated=False` additionally hides the page navigation. Streamlit
-    lists every file in pages/ automatically, which on the login screen
-    advertises the console's structure to someone who has not authenticated.
-    Each page still gates independently — this is defence in depth and basic
-    polish, never the access control itself.
+    `authenticated=False` additionally hides the sidebar. Each page still gates
+    independently — this is defence in depth and basic polish, never the access
+    control itself.
+
+    Returns the placeholder holding that sidebar-hiding rule (None when already
+    authenticated), so a sign-in that succeeds can lift it IN THE SAME RUN. The
+    console deliberately does not st.rerun() after sign-in (see
+    login.require_auth), so without this handle the sidebar would stay hidden
+    until the user's next click.
     """
     st.markdown(_CSS, unsafe_allow_html=True)
-    if not authenticated:
-        st.markdown(
-            "<style>[data-testid='stSidebarNav'], [data-testid='stSidebar'] "
-            "{display:none !important;}</style>",
-            unsafe_allow_html=True,
-        )
+    if authenticated:
+        return None
+    gate = st.empty()
+    gate.markdown(
+        "<style>[data-testid='stSidebarNav'], [data-testid='stSidebar'] "
+        "{display:none !important;}</style>",
+        unsafe_allow_html=True,
+    )
+    return gate
 
 
 NAV = [

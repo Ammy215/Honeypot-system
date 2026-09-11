@@ -120,25 +120,25 @@ def main():
     check("probe_url() joins base and path",
           sensor.probe_url() == "https://example.invalid/_health", sensor.probe_url())
 
-    with patch("requests.get", stub_get(200)):
+    with patch.object(sensor._SESSION, "get", stub_get(200)):
         r = sensor.probe()
     check("fast 200 -> online", r["state"] == sensor.ONLINE, r)
     check("online reports a latency", r["latency_ms"] is not None)
 
-    with patch("requests.get", stub_get(200, delay=0.45)):
+    with patch.object(sensor._SESSION, "get", stub_get(200, delay=0.45)):
         r = sensor.probe()
     check("slow 200 -> waking (cold start, NOT down)", r["state"] == sensor.WAKING, r)
 
-    with patch("requests.get", stub_get(503)):
+    with patch.object(sensor._SESSION, "get", stub_get(503)):
         r = sensor.probe()
     check("503 -> degraded (reachable, misbehaving)", r["state"] == sensor.DEGRADED, r)
     check("degraded records the status code", r["http_status"] == 503, r)
 
-    with patch("requests.get", stub_get(raises=requests.exceptions.Timeout())):
+    with patch.object(sensor._SESSION, "get", stub_get(raises=requests.exceptions.Timeout())):
         r = sensor.probe()
     check("timeout -> unreachable", r["state"] == sensor.UNREACHABLE, r)
 
-    with patch("requests.get", stub_get(raises=requests.exceptions.ConnectionError())):
+    with patch.object(sensor._SESSION, "get", stub_get(raises=requests.exceptions.ConnectionError())):
         r = sensor.probe()
     check("connection error -> unreachable", r["state"] == sensor.UNREACHABLE, r)
 
@@ -208,7 +208,9 @@ def main():
     section("Overview cannot drift back to inferring liveness from noise")
 
     app_src = APP.read_text(encoding="utf-8")
-    check("Overview calls data.sensor_status()", "data.sensor_status()" in app_src)
+    # A reference, not necessarily a call: Overview hands it to
+    # data.concurrently() so the probe overlaps the database read.
+    check("Overview reads liveness from data.sensor_status", "data.sensor_status" in app_src)
     check("Overview no longer reads filtered['latest']",
           'filtered["latest"]' not in app_src and "filtered.get(\"latest\")" not in app_src,
           "the frozen-timestamp inference is back")

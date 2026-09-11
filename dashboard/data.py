@@ -25,11 +25,14 @@ immediate re-read, wired to the sidebar's Refresh button.
 """
 
 import asyncio
-from typing import Optional
+import time
+from concurrent.futures import ThreadPoolExecutor
+from typing import Callable, Optional
 
 import streamlit as st
+from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
 
-from dashboard import sensor
+from dashboard import perf, sensor
 from dashboard.async_bridge import run as bridge_run
 from database.db_async import db
 from honeypot.detectors.async_correlation import detect_asn_campaigns, get_campaign_members
@@ -44,6 +47,32 @@ def refresh() -> None:
     st.cache_data.clear()
 
 
+def concurrently(*readers: Callable[[], object]) -> list:
+    """
+    Run independent cached readers at the same time; results in call order.
+
+    For reads that do not share an event loop — Overview's database bundle and
+    its HTTP health probe were running back to back, so a cache miss cost their
+    SUM. Overlapped, it costs the slower of the two.
+
+    Each worker is given the calling script's run context, which st.cache_data
+    needs to behave exactly as it does on the script thread. The executor is
+    per call, not shared: worker threads die with it, so one browser session's
+    context can never linger on a thread that later serves another session.
+    Exceptions surface here, unchanged, as if the reader had been called directly.
+    """
+    ctx = get_script_run_ctx()
+
+    def _call(reader):
+        if ctx is not None:
+            add_script_run_ctx(None, ctx)
+        return reader()
+
+    with ThreadPoolExecutor(max_workers=len(readers), thread_name_prefix="hs-read") as ex:
+        futures = [ex.submit(_call, r) for r in readers]
+        return [f.result() for f in futures]
+
+
 # ── Sensor liveness ───────────────────────────────────────────────────────
 # Longer than TTL: this is a network round trip to another continent, not a
 # database read, and liveness does not change meaningfully between two page
@@ -54,9 +83,24 @@ SENSOR_TTL = 30
 
 
 @st.cache_data(ttl=SENSOR_TTL, show_spinner=False)
-def sensor_status() -> dict:
-    """Probe the honeypot's health endpoint. See dashboard/sensor.py."""
+def _sensor_status_cached() -> dict:
+    perf.note_miss()
     return sensor.probe()
+
+
+def sensor_status() -> dict:
+    """
+    Probe the honeypot's health endpoint (see dashboard/sensor.py), cached.
+
+    Split from the cached function only so that, with DASHBOARD_PERF_LOG on,
+    each call is logged as a cache HIT or MISS with its latency — the body of a
+    cached function runs only on a miss, which is what note_miss() records.
+    """
+    started = time.perf_counter()
+    perf.begin()
+    result = _sensor_status_cached()
+    perf.record("sensor_status", started)
+    return result
 
 
 # ── Overview ──────────────────────────────────────────────────────────────

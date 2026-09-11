@@ -24,8 +24,10 @@ Do not reintroduce `asyncio.run` in dashboard code. Use `run()` below.
 
 import asyncio
 import threading
+import time
 from typing import Any, Coroutine
 
+from dashboard import perf
 from database.db_async import db
 
 # 120s: generous for a cold Supabase project waking from idle-pause, which
@@ -73,10 +75,17 @@ def run(coro: Coroutine[Any, Any, Any], timeout: float = DEFAULT_TIMEOUT) -> Any
     idempotent, so the common case costs one attribute check.
     """
     loop = _ensure_loop()
+    started = time.perf_counter()
 
     async def _with_connection():
         await db.connect()
         return await coro
 
     future = asyncio.run_coroutine_threadsafe(_with_connection(), loop)
-    return future.result(timeout)
+    try:
+        return future.result(timeout)
+    finally:
+        # Every database round trip in the console passes through here, and
+        # cached reads only reach it on a miss — so with DASHBOARD_PERF_LOG on,
+        # this line is the complete record of what actually hit the network.
+        perf.network(getattr(coro, "__qualname__", "coroutine"), started)

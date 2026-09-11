@@ -6,6 +6,20 @@
 [server]
 address = "127.0.0.1"
 headless = true
+# Off — this was the single largest cost in the console, measured, not assumed.
+#
+# The watcher exists to hot-reload the app when you edit a source file. To know
+# what to watch, Streamlit walks EVERY module in sys.modules after each script
+# run of each browser session, resolving and glob-matching every path — and it
+# does this ON THE SERVER'S EVENT LOOP. Instrumented against the live app:
+# 1.6-2.3 s per new session (1,561 modules -> 2,150 once google.genai loads),
+# during which the finished page could not be delivered to that browser, nor
+# any output to any OTHER open session. That was most of the 3+ seconds it took
+# even the sign-in form to appear.
+#
+# Cost of turning it off: editing a .py file no longer triggers a reload. Restart
+# the server after code changes — which a running console should require anyway.
+fileWatcherType = "none"
 
 [browser]
 gatherUsageStats = false

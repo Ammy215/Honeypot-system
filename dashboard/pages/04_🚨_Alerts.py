@@ -14,7 +14,9 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+_ROOT = str(Path(__file__).parent.parent.parent)
+if _ROOT not in sys.path:  # guarded: this line runs on every rerun
+    sys.path.insert(0, _ROOT)
 
 from dashboard import data, theme
 from dashboard.async_bridge import run as bridge_run

@@ -20,10 +20,13 @@ truth to their configuration, and they will change it without telling you. So
 this module performs the actual request and reports what actually happened.
 """
 
+import threading
 import time
 from typing import Optional
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 import config
 
@@ -32,6 +35,23 @@ import config
 # from the connect timeout so a genuinely unreachable host still fails fast
 # instead of freezing the page for the full read budget.
 CONNECT_TIMEOUT_SECONDS = 5.0
+
+# One persistent session, reused across probes. Measured from this machine:
+#   requests.get(), new connection every call ...... 1,138 ms median
+#   Session, connection kept alive .................   269 ms  (315 ms after 31 s idle)
+#   curl, fresh connection, for reference ..........  ~350 ms
+# The endpoint was never the slow part. A bare requests.get() builds a new SSL
+# context and re-reads the CA bundle on every call, which costs ~0.8 s on
+# Windows before a single byte is sent. Keeping one session skips all of that.
+#
+# One retry, on CONNECT failures only: a kept-alive socket the far end has
+# quietly closed fails at connect time, and a single retry on a fresh socket is
+# the correct response. Read timeouts are deliberately NOT retried — a
+# genuinely hung origin must surface after one timeout, not two.
+_SESSION = requests.Session()
+_SESSION.mount("https://", HTTPAdapter(max_retries=Retry(
+    total=1, connect=1, read=0, status=0, other=0, allowed_methods=["GET"])))
+_LOCK = threading.Lock()
 
 ONLINE = "online"
 WAKING = "waking"
@@ -70,11 +90,12 @@ def probe() -> dict:
 
     started = time.monotonic()
     try:
-        response = requests.get(
-            url,
-            timeout=(CONNECT_TIMEOUT_SECONDS, config.SENSOR_PROBE_TIMEOUT_SECONDS),
-            headers={"User-Agent": "HoneyShield-Console/1.0 (sensor probe)"},
-        )
+        with _LOCK:
+            response = _SESSION.get(
+                url,
+                timeout=(CONNECT_TIMEOUT_SECONDS, config.SENSOR_PROBE_TIMEOUT_SECONDS),
+                headers={"User-Agent": "HoneyShield-Console/1.0 (sensor probe)"},
+            )
     except requests.exceptions.Timeout:
         return {"state": UNREACHABLE, "url": url,
                 "latency_ms": int((time.monotonic() - started) * 1000),

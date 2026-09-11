@@ -109,6 +109,11 @@ SENSOR_PROBE_TIMEOUT_SECONDS = float(os.getenv("SENSOR_PROBE_TIMEOUT_SECONDS", "
 # is worth distinguishing from a healthy warm response.
 SENSOR_WAKING_THRESHOLD_SECONDS = float(os.getenv("SENSOR_WAKING_THRESHOLD_SECONDS", "5"))
 
+# Opt-in timing log for the dashboard (dashboard/perf.py): every cached read is
+# logged as a cache HIT or MISS with its latency, and every real database round
+# trip with the query bundle that made it. Off by default; a diagnostic.
+DASHBOARD_PERF_LOG = os.getenv("DASHBOARD_PERF_LOG", "false").strip().lower() in {"1", "true", "yes", "on"}
+
 # ── Database (v1, legacy dashboard/auth — unchanged) ─────
 DATABASE_PATH = "data/honeypot.db"
 
