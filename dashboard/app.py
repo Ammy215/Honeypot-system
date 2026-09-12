@@ -50,11 +50,18 @@ theme.page_header(
 _d, probe = data.concurrently(data.overview, data.sensor_status)
 summary, filtered = _d["summary"], _d["filtered"]
 
+traffic = _d["traffic"]
+_probes = traffic["probe"] + traffic["likely"]
+
 theme.kpis([
     {"label": "Attackers", "value": summary["total_attackers"],
-     "note": "distinct source IPs", "tone": theme.ACCENT},
+     "note": f"distinct source IPs · {traffic['sources'] - traffic['sources_unlabelled']}"
+             f" are platform probes" if _probes else "distinct source IPs",
+     "tone": theme.ACCENT},
     {"label": "Connections", "value": summary["total_connections"],
-     "note": "captured sessions", "tone": "#4A9EFF"},
+     "note": f"captured sessions · {_probes} are platform probes" if _probes
+             else "captured sessions",
+     "tone": "#4A9EFF"},
     {"label": "Active alerts", "value": summary["active_alerts"],
      "note": "awaiting triage",
      "tone": theme.SEVERITY["HIGH"] if summary["active_alerts"] else theme.MUTED},
@@ -62,6 +69,37 @@ theme.kpis([
      "note": "score ≥ 80",
      "tone": theme.SEVERITY["CRITICAL"] if summary["critical_attackers"] else theme.MUTED},
 ])
+
+# ── What was actually captured ────────────────────────────────────────────
+# The headline counts above are honest about rows and misleading about
+# attackers: the hosting platform probes the service once, about a second after
+# every restart, and that request is captured like any other visitor. Labelling
+# it is not enough — nobody should have to remember this — so the split is
+# stated here, on the page, every time.
+if _probes:
+    theme.section(
+        "What was captured",
+        "Every deploy or restart of the honeypot is followed a second later by one "
+        "request from the hosting platform itself (GET / from Google Cloud in "
+        "Oregon, where Render runs). Those are labelled and kept, never deleted — "
+        "they are true records, just not attacker traffic.",
+    )
+    theme.composition([
+        {"label": "Platform restart probes", "value": traffic["probe"],
+         "color": theme.MUTED},
+        {"label": "Likely restart probes", "value": traffic["likely"],
+         "color": "#55607A"},
+        {"label": "Unattributed", "value": traffic["unlabelled"],
+         "color": theme.ACCENT},
+    ])
+    st.caption(
+        f"{traffic['probe']} confirmed by timing, origin and request; "
+        f"{traffic['likely']} match timing and origin but were captured before "
+        f"request details were logged, so they cannot be confirmed; "
+        f"{traffic['unlabelled']} could not be attributed to a restart. "
+        f"Nothing captured so far has been confirmed as organic attacker traffic — "
+        f"see database/traffic_classification.py for the rule and the evidence."
+    )
 
 # ── Sensor health ─────────────────────────────────────────────────────────
 # The single most valuable thing this page can answer is "is the sensor alive?"

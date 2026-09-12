@@ -82,6 +82,9 @@ def bundle(filtered_latest, total=2830):
                      "latest": filtered_latest, "recent": []},
         "recent": [],
         "top": [],
+        # Platform-probe labelling, covered by tests/test_traffic_classification.py.
+        "traffic": {"connections": 0, "probe": 0, "likely": 0, "unlabelled": 0,
+                    "sources": 0, "sources_unlabelled": 0},
     }
 
 

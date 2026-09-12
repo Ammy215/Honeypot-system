@@ -855,6 +855,7 @@ _COLUMNS = {
     "city":              ("City", "text", "small"),
     "isp":               ("Network", "text", "medium"),
     "asn":               ("ASN", "text", "medium"),
+    "traffic_class":     ("Origin", "text", "medium"),
     "method":            ("Method", "text", "small"),
     "path":              ("Path", "text", "medium"),
     "user_agent":        ("User agent", "text", "large"),

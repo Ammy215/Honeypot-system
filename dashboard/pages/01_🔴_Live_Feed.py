@@ -27,6 +27,7 @@ require_auth("🔴", "Live Feed")
 # Heavy imports sit below the auth gate on purpose — see dashboard/login.py.
 import pandas as pd  # noqa: E402
 from dashboard import data  # noqa: E402
+from database.traffic_classification import CLASS_LABELS  # noqa: E402
 
 theme.page_header(
     "",
@@ -55,15 +56,26 @@ theme.kpis([
 ])
 
 # ── Connections ───────────────────────────────────────────────────────────
-theme.section("Captured connections", "Resolved source IP, service and enrichment per session.")
+traffic = _d["traffic"]
+theme.section(
+    "Captured connections",
+    "Resolved source IP, service and enrichment per session. The Origin column "
+    "separates real captures from the hosting platform's own restart probes — "
+    f"currently {traffic['probe'] + traffic['likely']} of {traffic['connections']} "
+    "rows are the platform probing itself, one per deploy.",
+)
 
 service = None if service_filter == "All" else service_filter
 connections = _d["connections"]
 
 if connections:
     df = pd.DataFrame(connections)
-    order = [c for c in ("connected_at", "ip_address", "country", "method", "path",
-                         "user_agent", "service", "port", "threat_score", "verdict", "id")
+    if "traffic_class" in df.columns:
+        # Our own labels, not data from the wire; see database/traffic_classification.py.
+        df["traffic_class"] = df["traffic_class"].map(lambda v: CLASS_LABELS.get(v, v))
+    order = [c for c in ("connected_at", "ip_address", "traffic_class", "country",
+                         "method", "path", "user_agent", "service", "port",
+                         "threat_score", "verdict", "id")
              if c in df.columns]
     # method/path/user_agent are attacker-controlled. st.dataframe renders cell
     # contents as inert text, which is why they appear here and never in a
@@ -71,7 +83,9 @@ if connections:
     theme.table(df[order], height=430)
     st.caption(f"Showing {len(df)} most recent connection(s). `method`, `path` and "
                "`user_agent` are recorded verbatim from the request — they show what "
-               "was probed for, not just that someone connected.")
+               "was probed for, not just that someone connected. Origin is applied "
+               "afterwards by scripts/tag_restart_probes.py; run it after a deploy to "
+               "label the probe that deploy produced.")
 
     probed = df[df["path"].notna()] if "path" in df.columns else df.iloc[0:0]
     if not probed.empty:

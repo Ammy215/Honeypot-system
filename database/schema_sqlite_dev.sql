@@ -21,7 +21,10 @@ CREATE TABLE IF NOT EXISTS attackers (
     -- Each enrichment source has its own TTL, checked independently.
     geo_checked_at       TEXT,
     abuseipdb_checked_at TEXT,
-    otx_checked_at       TEXT
+    otx_checked_at       TEXT,
+    -- Set only when every connection from this source is a platform restart
+    -- probe; see database/traffic_classification.py.
+    traffic_class        TEXT
 );
 
 CREATE TABLE IF NOT EXISTS connections (
@@ -41,7 +44,11 @@ CREATE TABLE IF NOT EXISTS connections (
     -- rationale. Truncated on write, NULL when no request data arrived.
     method     TEXT,
     path       TEXT,
-    user_agent TEXT
+    user_agent TEXT,
+    -- Platform restart probes vs captured traffic; see schema_postgres.sql and
+    -- database/traffic_classification.py.
+    traffic_class      TEXT,
+    traffic_class_note TEXT
 );
 
 CREATE TABLE IF NOT EXISTS login_attempts (

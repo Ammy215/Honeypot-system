@@ -46,7 +46,17 @@ CREATE TABLE IF NOT EXISTS connections (
     -- all — a bare TCP probe — which is itself a meaningful distinction.
     method     TEXT,
     path       TEXT,
-    user_agent TEXT
+    user_agent TEXT,
+
+    -- Labels traffic that came from the hosting platform rather than from the
+    -- internet: Render probes the service once, a second after every restart,
+    -- and that request is captured like any other visitor. NULL means "not
+    -- shown to be a probe" — the honeypot never writes these, they are applied
+    -- afterwards by scripts/tag_restart_probes.py, and the rows are labelled
+    -- rather than deleted because they are true records of what arrived.
+    -- See database/traffic_classification.py for the rule and the evidence.
+    traffic_class      TEXT,
+    traffic_class_note TEXT
 );
 
 -- Migrations for databases created before these columns existed. Additive and
@@ -56,6 +66,11 @@ ALTER TABLE connections ADD COLUMN IF NOT EXISTS forwarded_for_raw TEXT;
 ALTER TABLE connections ADD COLUMN IF NOT EXISTS method TEXT;
 ALTER TABLE connections ADD COLUMN IF NOT EXISTS path TEXT;
 ALTER TABLE connections ADD COLUMN IF NOT EXISTS user_agent TEXT;
+ALTER TABLE connections ADD COLUMN IF NOT EXISTS traffic_class TEXT;
+ALTER TABLE connections ADD COLUMN IF NOT EXISTS traffic_class_note TEXT;
+-- Derived from the rows above: set only when EVERY connection from that source
+-- is a probe. Recomputed by the same script, so it cannot drift on its own.
+ALTER TABLE attackers   ADD COLUMN IF NOT EXISTS traffic_class TEXT;
 
 CREATE TABLE IF NOT EXISTS login_attempts (
     id            BIGSERIAL PRIMARY KEY,

@@ -185,12 +185,19 @@ class AsyncDatabase:
         has no ADD COLUMN IF NOT EXISTS, so existing columns are checked first.
         Postgres handles the equivalent inline in schema_postgres.sql.
         """
+        added = {
+            "connections": ("forwarded_for_raw", "method", "path", "user_agent",
+                            "traffic_class", "traffic_class_note"),
+            "attackers": ("traffic_class",),
+        }
+
         def _work(conn: sqlite3.Connection):
-            existing = {row[1] for row in conn.execute("PRAGMA table_info(connections)")}
-            for column in ("forwarded_for_raw", "method", "path", "user_agent"):
-                if column not in existing:
-                    conn.execute(f"ALTER TABLE connections ADD COLUMN {column} TEXT")
-                    logger.info(f"Migrated SQLite dev DB: added connections.{column}")
+            for table, columns in added.items():
+                existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+                for column in columns:
+                    if column not in existing:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+                        logger.info(f"Migrated SQLite dev DB: added {table}.{column}")
 
         await self._run_sqlite(_work)
 
@@ -860,7 +867,7 @@ class AsyncDatabase:
     async def list_recent_connections(self, limit: int = 100, service: Optional[str] = None) -> list:
         base = """
             SELECT c.id, c.ip_address, c.service, c.port, c.connected_at,
-                   c.method, c.path, c.user_agent,
+                   c.method, c.path, c.user_agent, c.traffic_class,
                    a.country, a.threat_score, a.verdict
             FROM connections c
             LEFT JOIN attackers a ON a.ip_address = c.ip_address
@@ -884,6 +891,53 @@ class AsyncDatabase:
             else:
                 cur = conn.execute(base + " ORDER BY c.connected_at DESC LIMIT ?", (limit,))
             return [dict(r) for r in cur.fetchall()]
+
+        return await self._run_sqlite(_work)
+
+    async def traffic_breakdown(self) -> dict:
+        """
+        How much of what was captured is the hosting platform's own restart
+        probes, and how much is unattributed.
+
+        Counted from `connections`, not from `attackers`: the label describes a
+        request, and a source IP could send a probe today and be reassigned to
+        something real tomorrow (see database/traffic_classification.py). The
+        per-source figures are derived here for the same reason — so they can
+        never disagree with the rows they summarise.
+        """
+        sql = """
+            SELECT
+                count(*)                                            AS connections,
+                count(*) FILTER (WHERE traffic_class = 'restart_probe')        AS probe,
+                count(*) FILTER (WHERE traffic_class = 'restart_probe_likely') AS likely,
+                count(*) FILTER (WHERE traffic_class IS NULL)                  AS unlabelled,
+                count(DISTINCT ip_address)                          AS sources,
+                count(DISTINCT ip_address) FILTER (WHERE traffic_class IS NULL) AS sources_unlabelled
+            FROM connections
+        """
+        empty = {"connections": 0, "probe": 0, "likely": 0, "unlabelled": 0,
+                 "sources": 0, "sources_unlabelled": 0}
+
+        if self.backend == "postgres":
+            async with self._pg_pool.acquire() as conn:
+                row = await conn.fetchrow(sql)
+            return dict(row) if row else empty
+
+        def _work(conn: sqlite3.Connection):
+            conn.row_factory = sqlite3.Row
+            # SQLite has no FILTER clause before 3.30 and none in older builds
+            # bundled with Python on Windows; SUM(CASE) is equivalent and portable.
+            row = conn.execute("""
+                SELECT count(*) AS connections,
+                       sum(CASE WHEN traffic_class = 'restart_probe' THEN 1 ELSE 0 END) AS probe,
+                       sum(CASE WHEN traffic_class = 'restart_probe_likely' THEN 1 ELSE 0 END) AS likely,
+                       sum(CASE WHEN traffic_class IS NULL THEN 1 ELSE 0 END) AS unlabelled,
+                       count(DISTINCT ip_address) AS sources,
+                       count(DISTINCT CASE WHEN traffic_class IS NULL THEN ip_address END)
+                           AS sources_unlabelled
+                FROM connections
+            """).fetchone()
+            return {k: (v or 0) for k, v in dict(row).items()} if row else empty
 
         return await self._run_sqlite(_work)
 

@@ -107,13 +107,15 @@ def sensor_status() -> dict:
 @st.cache_data(ttl=TTL, show_spinner=False)
 def overview() -> dict:
     async def _load():
-        summary, filtered, recent, top = await asyncio.gather(
+        summary, filtered, recent, top, traffic = await asyncio.gather(
             db.summary_counts(),
             db.filtered_connection_stats(),
             db.list_recent_connections(limit=5),
             db.list_attackers(limit=5),
+            db.traffic_breakdown(),
         )
-        return {"summary": summary, "filtered": filtered, "recent": recent, "top": top}
+        return {"summary": summary, "filtered": filtered, "recent": recent,
+                "top": top, "traffic": traffic}
 
     return bridge_run(_load())
 
@@ -122,14 +124,15 @@ def overview() -> dict:
 @st.cache_data(ttl=TTL, show_spinner=False)
 def live_feed(service: Optional[str]) -> dict:
     async def _load():
-        summary, connections, filtered, alerts = await asyncio.gather(
+        summary, connections, filtered, alerts, traffic = await asyncio.gather(
             db.summary_counts(),
             db.list_recent_connections(limit=100, service=service),
             db.filtered_connection_stats(),
             db.list_alerts(limit=10),
+            db.traffic_breakdown(),
         )
         return {"summary": summary, "connections": connections,
-                "filtered": filtered, "alerts": alerts}
+                "filtered": filtered, "alerts": alerts, "traffic": traffic}
 
     return bridge_run(_load())
 

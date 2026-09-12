@@ -300,7 +300,9 @@ def test_overview_overlaps():
                           "active_alerts": 0, "critical_attackers": 0},
               "filtered": {"total": 0, "last_hour": 0, "last_24h": 0,
                            "latest": None, "recent": []},
-              "recent": [], "top": []}
+              "recent": [], "top": [],
+              "traffic": {"connections": 1, "probe": 0, "likely": 0, "unlabelled": 1,
+                          "sources": 1, "sources_unlabelled": 1}}
     with patch("dashboard.data.overview", slow("db", bundle)), \
          patch("dashboard.data.sensor_status", slow("probe", ONLINE)):
         at = AppTest.from_file(str(APP), default_timeout=180)
